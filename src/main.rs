@@ -99,7 +99,7 @@ fn fcount(
     for (index, line) in cellreader.lines().enumerate() {
         let line = line?;
         cells.insert(line.clone(), index);
-        // writeln!(stdout, "{}", line).unwrap();
+        // writeln!(stdout, "{}", index).unwrap();
     }
 
     // create region index variable for matrix row index
@@ -114,19 +114,33 @@ fn fcount(
         let region = Region::new(record.reference_sequence_name(), record.start_position()..=record.end_position());
 
         let query = tbxreader.query(&region)?;
+
         for entry in query {
             let frag_entry = entry?;
 
-            // TODO match cell barcodes in hashmap, create vector
+            // extract cell barcode from bed entry
+            let lines: Vec<&str> = frag_entry.as_ref().split('\t').collect();
+            let mut cb = Vec::new();
+            cb.push(lines[3].to_string());
+            // println!("{:?}", cb);
 
-            writeln!(stdout, "{}", frag_entry.as_ref()).unwrap();  // placeholder
+            // TODO: remove cells that are not in cell list
+            //       skip BED entry if cells vector is empty after filtering
+            
+            // collapse into frequency table
+            let mut cb_freq = HashMap::new();
+            for cell in cb {
+                let counter = cb_freq.entry(cell).or_insert(0);
+                *counter += 1;
+            }
+
+            // look up CB index in hashmap
+
+            // output bed_idx,CB_idx,count
+
         }
 
-        // - match cell barcodes in entry to cell barcodes in list
-        // - convert cell barcode to list index
-        // - count fragments per cell barcode
-        // - append row,column,value to mtx file
-        // - increment region index
+        // increment region index
         bed_idx = bed_idx + 1;
 
         // need to track number of nonzero entries (total lines written) and number of bed entries, add this to mtx header at the end?
