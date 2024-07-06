@@ -5,6 +5,9 @@ use std::{
     io::Write,
     io::BufReader,
     io::BufRead,
+    io::copy,
+    io::Seek,
+    io::SeekFrom,
     collections::HashMap,
 };
 use clap::{
@@ -18,6 +21,7 @@ use noodles::{
     };
 use log::info;
 use pretty_env_logger;
+use tempfile::NamedTempFile;
 
 fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
@@ -47,6 +51,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .help("List of cells to include")
                 .required(true),
         )
+        .arg(
+            Arg::new("outfile")
+                .short('o')
+                .long("outfile")
+                .help("Output file name")
+                .required(true),
+        )
         .get_matches();
 
     let frag_file = Path::new(matches.get_one::<String>("fragments").unwrap())
@@ -64,25 +75,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         .expect("Can't find path to input cell file");
     info!("Received cell file: {:?}", cell_file);
 
-    fcount(&frag_file, &bed_file, &cell_file)?;
+    let output_file = matches.get_one::<String>("outfile").unwrap();
+    info!("Received output file path: {:?}", output_file);
+
+    fcount(&frag_file, &bed_file, &cell_file, &output_file)?;
 
     Ok(())
 }
 
-// TODO add stdout for mtx row,column,value entries
 fn fcount(
     frag_file: &Path,
     bed_file: &Path,
     cell_file: &Path,
+    outfile: &String,
 ) -> Result<(), Box<dyn Error>> {
     info!(
         "Processing fragment file: {:?}, BED file: {:?}, Cell file: {:?}",
         frag_file, bed_file, cell_file
     );
 
-    // printing to stdout. TODO: change to file output
-    let mut stdout = std::io::stdout().lock();
-    writeln!(stdout, "%%MatrixMarket matrix coordinate integer general").unwrap();
+    // create temp file
+    let mut temp_file = NamedTempFile::new()?;
+
+    // create output file 
+    let mut outf = File::create(outfile)?;
 
     // tabix file reader
     let mut tbxreader = tabix::io::indexed_reader::Builder::default().build_from_path(frag_file)?;
@@ -104,9 +120,12 @@ fn fcount(
     // create region index variable for matrix row index
     let mut bed_idx = 1;
 
-    // TODO
-    // might be better to output to a directory rather than stdout as we need the features and cells txt files as well, and to add the matrix dimension to the header
-    // could use the input bed and cells files as the mtx row/col names
+    // nonzero entry counter
+    let mut nz = 0;
+
+    let mut cb_vec = Vec::new();
+    let mut bed_vec = Vec::new();
+    let mut value_vec = Vec::new();
 
     for result in bedreader.records::<3>() {
         
@@ -130,16 +149,48 @@ fn fcount(
             }
         }
 
-        // output bed_idx,CB_idx,count
-        for (index, count) in &cb_freq {
-            writeln!(stdout, "{:?},{},{}", index, count, bed_idx).unwrap();
+        for (index, count) in cb_freq {
+            nz = nz + 1;
+            cb_vec.push(index+1);
+            value_vec.push(count);
+            bed_vec.push(bed_idx);
+        }
+
+        if cb_vec.len() > 100000 {
+            let mut combined_string = String::new();
+            for i in 0..cb_vec.len() {
+                combined_string.push_str(&format!("{} {} {}\n", bed_vec[i], cb_vec[i], value_vec[i]));
+            }
+            
+            // write to file
+            temp_file.write_all(combined_string.as_bytes())?;
+
+            // clear vectors
+            cb_vec.clear();
+            bed_vec.clear();
+            value_vec.clear();
         }
 
         // increment region index
         bed_idx = bed_idx + 1;
-
-        // need to track number of nonzero entries (total lines written) and number of bed entries, add this to mtx header at the end?
-
     }
+
+    // write remaining values to file
+    let mut combined_string = String::new();
+    for i in 0..cb_vec.len() {
+        combined_string.push_str(&format!("{} {} {}\n", bed_vec[i], cb_vec[i], value_vec[i]));
+    }
+    // write to file
+    temp_file.write_all(combined_string.as_bytes())?;
+
+    let _ = outf.write_all("%%MatrixMarket matrix coordinate integer general\n".as_bytes());
+    let _ = outf.write_all("%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}\n".as_bytes());
+    let formatted_string = format!("{} {} {}\n", bed_idx - 1, cells.len(), nz);
+    outf.write_all(formatted_string.as_bytes())?;
+
+    // cat header and output file
+    temp_file.as_file_mut().seek(SeekFrom::Start(0))?;
+    copy(&mut temp_file, &mut outf)?;
+
     Ok(())
 }
