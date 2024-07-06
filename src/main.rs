@@ -95,11 +95,10 @@ fn fcount(
     //  create hashmap for cell barcodes
     let cellreader = File::open(cell_file)
         .map(BufReader::new)?;
-    let mut cells = HashMap::new();
+    let mut cells: HashMap<String, usize> = HashMap::new();
     for (index, line) in cellreader.lines().enumerate() {
         let line = line?;
         cells.insert(line.clone(), index);
-        // writeln!(stdout, "{}", index).unwrap();
     }
 
     // create region index variable for matrix row index
@@ -107,37 +106,33 @@ fn fcount(
 
     // TODO
     // might be better to output to a directory rather than stdout as we need the features and cells txt files as well, and to add the matrix dimension to the header
-    
-    for result in bedreader.records::<3>() {
+    // could use the input bed and cells files as the mtx row/col names
 
+    for result in bedreader.records::<3>() {
+        
         let record = result?;
         let region = Region::new(record.reference_sequence_name(), record.start_position()..=record.end_position());
-
         let query = tbxreader.query(&region)?;
+        let mut cb = Vec::new();
 
         for entry in query {
             let frag_entry = entry?;
-
-            // extract cell barcode from bed entry
             let lines: Vec<&str> = frag_entry.as_ref().split('\t').collect();
-            let mut cb = Vec::new();
             cb.push(lines[3].to_string());
-            // println!("{:?}", cb);
-
-            // TODO: remove cells that are not in cell list
-            //       skip BED entry if cells vector is empty after filtering
-            
-            // collapse into frequency table
-            let mut cb_freq = HashMap::new();
-            for cell in cb {
-                let counter = cb_freq.entry(cell).or_insert(0);
+        }
+        
+        // create frequency table and cell index hashmap
+        let mut cb_freq = HashMap::new();
+        for cell in cb {
+            if let Some(&idx) = cells.get(&cell) {
+                let counter = cb_freq.entry(idx).or_insert(0);
                 *counter += 1;
             }
+        }
 
-            // look up CB index in hashmap
-
-            // output bed_idx,CB_idx,count
-
+        // output bed_idx,CB_idx,count
+        for (index, count) in &cb_freq {
+            writeln!(stdout, "{:?},{},{}", index, count, bed_idx).unwrap();
         }
 
         // increment region index
