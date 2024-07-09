@@ -14,11 +14,8 @@ use clap::{
     Arg,
     Command
 };
-use noodles::{
-    tabix,
-    bed,
-    core::Region,
-    };
+use bio::data_structures::interval_tree::{Entry, IntervalTree};
+use bio::io::bed;
 use log::info;
 use pretty_env_logger;
 use tempfile::NamedTempFile;
@@ -100,97 +97,107 @@ fn fcount(
     // create output file 
     let mut outf = File::create(outfile)?;
 
-    // tabix file reader
-    let mut tbxreader = tabix::io::indexed_reader::Builder::default().build_from_path(frag_file)?;
-
+    // gzip fragment file reader
+    // TODO
+    
     // bed file reader
     let mut bedreader = File::open(bed_file)
         .map(BufReader::new)
-        .map(bed::io::Reader::new)?;
+        .map(bed::Reader::new)?;
+    // println!("{:?}", bedreader);
+
+    // create BED interval tree for overlaps with fragment coordinates
+    // TODO
 
     //  create hashmap for cell barcodes
     let cellreader = File::open(cell_file)
         .map(BufReader::new)?;
+    
     let mut cells: HashMap<String, usize> = HashMap::new();
     for (index, line) in cellreader.lines().enumerate() {
         let line = line?;
         cells.insert(line.clone(), index);
     }
 
-    // create region index variable for matrix row index
-    let mut bed_idx = 1;
+    // // create region index variable for matrix row index
+    // let mut bed_idx = 1;
 
     // nonzero entry counter
     let mut nz = 0;
 
-    let mut cb_vec = Vec::new();
-    let mut bed_vec = Vec::new();
-    let mut value_vec = Vec::new();
+    // let mut cb_vec = Vec::new();
+    // let mut bed_vec = Vec::new();
+    // let mut value_vec = Vec::new();
 
-    for result in bedreader.records::<3>() {
+    for result in bedreader.records() {
         
         let record = result?;
-        let region = Region::new(record.reference_sequence_name(), record.start_position()..=record.end_position());
-        let query = tbxreader.query(&region)?;
-        let mut cb = Vec::new();
+        println!("{:?}", record);
+    //     let region = Region::new(record.reference_sequence_name(), record.start_position()..=record.end_position());
+    //     let query = tbxreader.query(&region)?;
+    //     let mut cb = Vec::new();
 
-        for entry in query {
-            let frag_entry = entry?;
-            let lines: Vec<&str> = frag_entry.as_ref().split('\t').collect();
-            cb.push(lines[3].to_string());
-        }
+    //     for entry in query {
+    //         let frag_entry = entry?;
+    //         let lines: Vec<&str> = frag_entry.as_ref().split('\t').collect();
+    //         cb.push(lines[3].to_string());
+    //     }
         
-        // create frequency table and cell index hashmap
-        let mut cb_freq = HashMap::new();
-        for cell in cb {
-            if let Some(&idx) = cells.get(&cell) {
-                let counter = cb_freq.entry(idx).or_insert(0);
-                *counter += 1;
-            }
-        }
+    //     // create frequency table and cell index hashmap
+    //     let mut cb_freq = HashMap::new();
+    //     for cell in cb {
+    //         if let Some(&idx) = cells.get(&cell) {
+    //             let counter = cb_freq.entry(idx).or_insert(0);
+    //             *counter += 1;
+    //         }
+    //     }
 
-        for (index, count) in cb_freq {
-            nz = nz + 1;
-            cb_vec.push(index+1);
-            value_vec.push(count);
-            bed_vec.push(bed_idx);
-        }
+    //     for (index, count) in cb_freq {
+    //         nz = nz + 1;
+    //         cb_vec.push(index+1);
+    //         value_vec.push(count);
+    //         bed_vec.push(bed_idx);
+    //     }
 
-        if cb_vec.len() > 100000 {
-            let mut combined_string = String::new();
-            for i in 0..cb_vec.len() {
-                combined_string.push_str(&format!("{} {} {}\n", bed_vec[i], cb_vec[i], value_vec[i]));
-            }
-            
-            // write to file
-            temp_file.write_all(combined_string.as_bytes())?;
+    //     if cb_vec.len() > 1000000 {
+    //         let mut combined_string = String::new();
+    //         for i in 0..cb_vec.len() {
+    //             combined_string.push_str(&format!("{} {} {}\n", bed_vec[i], cb_vec[i], value_vec[i]));
+    //         }
 
-            // clear vectors
-            cb_vec.clear();
-            bed_vec.clear();
-            value_vec.clear();
-        }
+    //         // write to file
+    //         temp_file.write_all(combined_string.as_bytes())?;
 
-        // increment region index
-        bed_idx = bed_idx + 1;
+    //         // clear vectors
+    //         cb_vec.clear();
+    //         bed_vec.clear();
+    //         value_vec.clear();
+    //     }
+
+    //     // increment region index
+    //     bed_idx = bed_idx + 1;
     }
 
-    // write remaining values to file
-    let mut combined_string = String::new();
-    for i in 0..cb_vec.len() {
-        combined_string.push_str(&format!("{} {} {}\n", bed_vec[i], cb_vec[i], value_vec[i]));
-    }
-    // write to file
-    temp_file.write_all(combined_string.as_bytes())?;
+    // // write remaining values to file
+    // let mut combined_string = String::new();
+    // for i in 0..cb_vec.len() {
+    //     combined_string.push_str(&format!("{} {} {}\n", bed_vec[i], cb_vec[i], value_vec[i]));
+    // }
+    // // write to file
+    // temp_file.write_all(combined_string.as_bytes())?;
 
-    let _ = outf.write_all("%%MatrixMarket matrix coordinate integer general\n".as_bytes());
-    let _ = outf.write_all("%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}\n".as_bytes());
-    let formatted_string = format!("{} {} {}\n", bed_idx - 1, cells.len(), nz);
-    outf.write_all(formatted_string.as_bytes())?;
+    // let _ = outf.write_all("%%MatrixMarket matrix coordinate integer general\n".as_bytes());
+    // let _ = outf.write_all("%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}\n".as_bytes());
+    // let formatted_string = format!("{} {} {}\n", bed_idx - 1, cells.len(), nz);
+    // outf.write_all(formatted_string.as_bytes())?;
 
-    // cat header and output file
-    temp_file.as_file_mut().seek(SeekFrom::Start(0))?;
-    copy(&mut temp_file, &mut outf)?;
+    // // cat header and output file
+    // temp_file.as_file_mut().seek(SeekFrom::Start(0))?;
+    // copy(&mut temp_file, &mut outf)?;
 
     Ok(())
 }
+
+
+// try with rust lapper https://docs.rs/rust-lapper/latest/rust_lapper/
+// much faster overlap method

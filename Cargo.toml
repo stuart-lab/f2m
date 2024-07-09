@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bio = "2.0.0"
 clap = { version = "4.1", features = ["derive"] }
 log = "0.4.22"
 noodles = { version = "0.77.0", features = ["async", "bed", "core", "tabix"] }
