@@ -119,12 +119,22 @@ fn fcount(
     // iterate over gzip fragments file
     let reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
 
+    // Progress counter
+    let mut line_count = 0;
+    let update_interval = 1_000_000;
+
     for line in reader.lines() {
         let line = line?;
 
         // Skip header lines that start with #
         if line.starts_with('#') {
             continue;
+        }
+
+        line_count += 1;
+        if line_count % update_interval == 0 {
+            print!("\rProcessed {} M fragments", line_count / 1_000_000 );
+            std::io::stdout().flush().expect("Can't flush output");
         }
         
         // parse bed entry
@@ -163,6 +173,7 @@ fn fcount(
 
     // write count matrix
     let num_peaks = peaks.values().map(|lapper| lapper.intervals.len()).sum::<usize>();
+    info!("Writing output file: {:?}", outf);
     write_matrix_market(&mut outf, &peak_cell_counts, num_peaks, cells.len())?; // peaks stored as rows
 
     Ok(())
@@ -174,15 +185,21 @@ fn write_matrix_market<W: Write>(
     nrow: usize,
     ncol: usize,
 ) -> io::Result<()> {
-    // Write the header for the Matrix Market format
-    writeln!(writer, "%%MatrixMarket matrix coordinate integer general")?;
-    writeln!(writer, "%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}")?;
-    writeln!(writer, "{} {} {}", nrow, ncol, peak_cell_counts.len())?;
+    // Create a string buffer to collect all lines
+    let mut output = String::new();
 
-    // Write each peak-cell-count entry
+    // Write the header for the Matrix Market format
+    output.push_str("%%MatrixMarket matrix coordinate integer general\n");
+    output.push_str("%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}\n");
+    output.push_str(&format!("{} {} {}\n", nrow, ncol, peak_cell_counts.len()));
+
+    // Collect each peak-cell-count entry into the string buffer
     for ((peak_index, cell_index), count) in peak_cell_counts {
-        writeln!(writer, "{} {} {}", peak_index + 1, cell_index + 1, count)?; // +1 to convert 0-based to 1-based indices
+        output.push_str(&format!("{} {} {}\n", peak_index + 1, cell_index + 1, count)); // +1 to convert 0-based to 1-based indices
     }
+
+    // Write the entire string buffer to the writer in one go
+    writer.write_all(output.as_bytes())?;
 
     Ok(())
 }
