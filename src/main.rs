@@ -5,6 +5,7 @@ use std::{
     fs::File,
     io::BufReader,
     io::BufRead,
+    io::Write,
     collections::HashMap,
 };
 use clap::{
@@ -91,7 +92,7 @@ fn fcount(
     );
 
     // create output file 
-    let outf = File::create(outfile)?;
+    let mut outf = File::create(outfile)?;
     
     // create BED intervals for overlaps with fragment coordinates
     let peaks = match peak_intervals(bed_file) {
@@ -112,52 +113,76 @@ fn fcount(
         cells.insert(line.clone(), index);
     }
 
-    // nonzero entry counter
-    let mut nz = 0;
+    // HashMap to store counts for peak-cell combinations
+    let mut peak_cell_counts: HashMap<(usize, usize), usize> = HashMap::new();
 
     // iterate over gzip fragments file
     let reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
 
     for line in reader.lines() {
         let line = line?;
+
+        // Skip header lines that start with #
+        if line.starts_with('#') {
+            continue;
+        }
         
         // parse bed entry
         let fields: Vec<&str> = line.split('\t').collect();
 
         // check if cell is to be included
-        let cb: &str = fields[3];
-        if cells.contains_key(cb) {
+        let cell_barcode: &str = fields[3];
+        if let Some(&cell_index) = cells.get(cell_barcode) {
 
             // create intervals from fragment entry
             let seqname: &str = fields[0];
-            let startpos: u32 = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            let endpos: u32 = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-            // find overlapping peaks
-            if let Some(olap_start) = find_overlaps(&peaks, seqname, startpos, startpos+1) {
-                for interval in olap_start {
-                    // record cell barcode and add count for start position fragment insertion
-
-                    nz += 1;
-                    println!("{}", interval);
+            // check if the chromosome exists in peaks
+            if peaks.contains_key(seqname) {
+                let startpos: u32 = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let endpos: u32 = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    
+                // find overlapping peaks
+                if let Some(olap_start) = find_overlaps(&peaks, seqname, startpos, startpos+1) {
+                    for peak_index in olap_start {
+                        *peak_cell_counts.entry((peak_index, cell_index)).or_insert(0) += 1;
+                    }
                 }
-            };
-
-            if let Some(olap_end) = find_overlaps(&peaks, seqname, endpos, endpos+1) {
-                for interval in olap_end {
-                    // record cell barcode and add count for end position fragment insertion
-                    // println!("{}", interval);
+                if let Some(olap_end) = find_overlaps(&peaks, seqname, endpos, endpos+1) {
+                    for peak_index in olap_end {
+                        *peak_cell_counts.entry((peak_index, cell_index)).or_insert(0) += 1;
+                    }
                 }
-            };
+            }
         }
-
-        nz += 1; // todo: update this 
 
         // TODO set endpos so we don't need to search all peaks again for next entry
         // might speed things up
 
     }
-    println!("{}", nz);
+
+    // write count matrix
+    let num_peaks = peaks.values().map(|lapper| lapper.intervals.len()).sum::<usize>();
+    write_matrix_market(&mut outf, &peak_cell_counts, num_peaks, cells.len())?; // peaks stored as rows
+
+    Ok(())
+}
+
+fn write_matrix_market<W: Write>(
+    writer: &mut W,
+    peak_cell_counts: &HashMap<(usize, usize), usize>,
+    nrow: usize,
+    ncol: usize,
+) -> io::Result<()> {
+    // Write the header for the Matrix Market format
+    writeln!(writer, "%%MatrixMarket matrix coordinate integer general")?;
+    writeln!(writer, "%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}")?;
+    writeln!(writer, "{} {} {}", nrow, ncol, peak_cell_counts.len())?;
+
+    // Write each peak-cell-count entry
+    for ((peak_index, cell_index), count) in peak_cell_counts {
+        writeln!(writer, "{} {} {}", peak_index + 1, cell_index + 1, count)?; // +1 to convert 0-based to 1-based indices
+    }
 
     Ok(())
 }
@@ -225,15 +250,3 @@ fn peak_intervals(
 
     Ok(lapper_map)
 }
-
-// // steps:
-// 1. read line
-// 2. overlap with interal tree
-// 3. if match, add to hashmap with peak, cell, count
-// 4. read next line, if start position beyond end of last peak check for overlaps with peak set again
-// 5. if start position of next line is less than end position of the previous peak, add to quantification for same peak
-// 6. continue until no more lines
-// 7. write hashmap containing peak, cell, count values to file as matrix market format
-
-// time to iterate over all lines of 2.2 Gb file: 1 min (227M fragments)
-//                                   200 mB file: 6 s   (20M fragments)
