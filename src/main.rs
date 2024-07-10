@@ -23,7 +23,7 @@ type Iv = Interval<u32, usize>;
 fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
 
-    let matches = Command::new("fcount")
+    let matches = Command::new("f2m")
         .version("0.1")
         .author("Tim Stuart")
         .about("Create a cell x feature matrix")
