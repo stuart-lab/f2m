@@ -1,24 +1,23 @@
 use std::{
+    io,
     path::Path,
     error::Error,
     fs::File,
-    io::Write,
     io::BufReader,
     io::BufRead,
-    io::copy,
-    io::Seek,
-    io::SeekFrom,
     collections::HashMap,
 };
 use clap::{
     Arg,
     Command
 };
-use bio::data_structures::interval_tree::{Entry, IntervalTree};
-use bio::io::bed;
+use rust_lapper::{Interval, Lapper};
+use flate2::read::MultiGzDecoder;
+use log::error;
 use log::info;
 use pretty_env_logger;
-use tempfile::NamedTempFile;
+
+type Iv = Interval<u32, usize>;
 
 fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
@@ -85,31 +84,25 @@ fn fcount(
     bed_file: &Path,
     cell_file: &Path,
     outfile: &String,
-) -> Result<(), Box<dyn Error>> {
+) -> io::Result<()> {
     info!(
         "Processing fragment file: {:?}, BED file: {:?}, Cell file: {:?}",
         frag_file, bed_file, cell_file
     );
 
-    // create temp file
-    let mut temp_file = NamedTempFile::new()?;
-
     // create output file 
-    let mut outf = File::create(outfile)?;
-
-    // gzip fragment file reader
-    // TODO
+    let outf = File::create(outfile)?;
     
-    // bed file reader
-    let mut bedreader = File::open(bed_file)
-        .map(BufReader::new)
-        .map(bed::Reader::new)?;
-    // println!("{:?}", bedreader);
+    // create BED intervals for overlaps with fragment coordinates
+    let peaks = match peak_intervals(bed_file) {
+        Ok(trees) => trees,
+        Err(e) => {
+            error!("Failed to read BED file: {}", e);
+            return Err(e);
+        }
+    };
 
-    // create BED interval tree for overlaps with fragment coordinates
-    // TODO
-
-    //  create hashmap for cell barcodes
+    // create hashmap for cell barcodes
     let cellreader = File::open(cell_file)
         .map(BufReader::new)?;
     
@@ -119,85 +112,128 @@ fn fcount(
         cells.insert(line.clone(), index);
     }
 
-    // // create region index variable for matrix row index
-    // let mut bed_idx = 1;
-
     // nonzero entry counter
     let mut nz = 0;
 
-    // let mut cb_vec = Vec::new();
-    // let mut bed_vec = Vec::new();
-    // let mut value_vec = Vec::new();
+    // iterate over gzip fragments file
+    let reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
 
-    for result in bedreader.records() {
+    for line in reader.lines() {
+        let line = line?;
         
-        let record = result?;
-        println!("{:?}", record);
-    //     let region = Region::new(record.reference_sequence_name(), record.start_position()..=record.end_position());
-    //     let query = tbxreader.query(&region)?;
-    //     let mut cb = Vec::new();
+        // parse bed entry
+        let fields: Vec<&str> = line.split('\t').collect();
 
-    //     for entry in query {
-    //         let frag_entry = entry?;
-    //         let lines: Vec<&str> = frag_entry.as_ref().split('\t').collect();
-    //         cb.push(lines[3].to_string());
-    //     }
-        
-    //     // create frequency table and cell index hashmap
-    //     let mut cb_freq = HashMap::new();
-    //     for cell in cb {
-    //         if let Some(&idx) = cells.get(&cell) {
-    //             let counter = cb_freq.entry(idx).or_insert(0);
-    //             *counter += 1;
-    //         }
-    //     }
+        // check if cell is to be included
+        let cb: &str = fields[3];
+        if cells.contains_key(cb) {
 
-    //     for (index, count) in cb_freq {
-    //         nz = nz + 1;
-    //         cb_vec.push(index+1);
-    //         value_vec.push(count);
-    //         bed_vec.push(bed_idx);
-    //     }
+            // create intervals from fragment entry
+            let seqname: &str = fields[0];
+            let startpos: u32 = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let endpos: u32 = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    //     if cb_vec.len() > 1000000 {
-    //         let mut combined_string = String::new();
-    //         for i in 0..cb_vec.len() {
-    //             combined_string.push_str(&format!("{} {} {}\n", bed_vec[i], cb_vec[i], value_vec[i]));
-    //         }
+            // find overlapping peaks
+            if let Some(olap_start) = find_overlaps(&peaks, seqname, startpos, startpos+1) {
+                for interval in olap_start {
+                    // record cell barcode and add count for start position fragment insertion
 
-    //         // write to file
-    //         temp_file.write_all(combined_string.as_bytes())?;
+                    nz += 1;
+                    println!("{}", interval);
+                }
+            };
 
-    //         // clear vectors
-    //         cb_vec.clear();
-    //         bed_vec.clear();
-    //         value_vec.clear();
-    //     }
+            if let Some(olap_end) = find_overlaps(&peaks, seqname, endpos, endpos+1) {
+                for interval in olap_end {
+                    // record cell barcode and add count for end position fragment insertion
+                    // println!("{}", interval);
+                }
+            };
+        }
 
-    //     // increment region index
-    //     bed_idx = bed_idx + 1;
+        nz += 1; // todo: update this 
+
+        // TODO set endpos so we don't need to search all peaks again for next entry
+        // might speed things up
+
     }
-
-    // // write remaining values to file
-    // let mut combined_string = String::new();
-    // for i in 0..cb_vec.len() {
-    //     combined_string.push_str(&format!("{} {} {}\n", bed_vec[i], cb_vec[i], value_vec[i]));
-    // }
-    // // write to file
-    // temp_file.write_all(combined_string.as_bytes())?;
-
-    // let _ = outf.write_all("%%MatrixMarket matrix coordinate integer general\n".as_bytes());
-    // let _ = outf.write_all("%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}\n".as_bytes());
-    // let formatted_string = format!("{} {} {}\n", bed_idx - 1, cells.len(), nz);
-    // outf.write_all(formatted_string.as_bytes())?;
-
-    // // cat header and output file
-    // temp_file.as_file_mut().seek(SeekFrom::Start(0))?;
-    // copy(&mut temp_file, &mut outf)?;
+    println!("{}", nz);
 
     Ok(())
 }
 
+fn find_overlaps(
+    lapper_map: &HashMap<String, Lapper<u32, usize>>, 
+    chromosome: &str, 
+    start: u32, 
+    end: u32
+) -> Option<Vec<usize>> {
+    lapper_map.get(chromosome).map(|lapper| {
+        lapper.find(start, end).map(|interval| interval.val).collect()
+    })
+}
 
-// try with rust lapper https://docs.rs/rust-lapper/latest/rust_lapper/
-// much faster overlap method
+
+fn peak_intervals(
+    bed_file: &Path,
+) -> io::Result<HashMap<String, Lapper<u32, usize>>> {
+    
+    // bed file reader
+    let file = File::open(bed_file)?;
+    let reader = BufReader::new(file);
+
+    // chromosome trees
+    let mut chromosome_trees: HashMap<String, Vec<Iv>> = HashMap::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        match line {
+            Ok(line) => {
+                let fields: Vec<&str> = line.split('\t').collect();
+                if fields.len() >= 3 {
+                    let chromosome = fields[0].to_string();
+                    let start: u32 = match fields[1].parse() {
+                        Ok(num) => num,
+                        Err(_) => {
+                            error!("Line {}: Failed to parse start position", index + 1);
+                            continue;
+                        }
+                    };
+                    let end: u32 = match fields[2].parse() {
+                        Ok(num) => num,
+                        Err(_) => {
+                            error!("Line {}: Failed to parse end position", index + 1);
+                            continue;
+                        }
+                    };
+
+                    let intervals = chromosome_trees.entry(chromosome).or_insert_with(Vec::new);
+                    intervals.push(Interval { start, stop: end, val: index });
+                } else {
+                    error!("Line {}: Less than three fields", index + 1);
+                }
+            },
+            Err(e) => {
+                error!("Error reading line {}: {}", index + 1, e);
+                break;
+            }
+        }
+    }
+
+    let lapper_map = chromosome_trees.into_iter()
+        .map(|(chr, intervals)| (chr, Lapper::new(intervals)))
+        .collect();
+
+    Ok(lapper_map)
+}
+
+// // steps:
+// 1. read line
+// 2. overlap with interal tree
+// 3. if match, add to hashmap with peak, cell, count
+// 4. read next line, if start position beyond end of last peak check for overlaps with peak set again
+// 5. if start position of next line is less than end position of the previous peak, add to quantification for same peak
+// 6. continue until no more lines
+// 7. write hashmap containing peak, cell, count values to file as matrix market format
+
+// time to iterate over all lines of 2.2 Gb file: 1 min (227M fragments)
+//                                   200 mB file: 6 s   (20M fragments)
