@@ -14,6 +14,8 @@ use clap::{
 };
 use rust_lapper::{Interval, Lapper};
 use flate2::read::MultiGzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use log::error;
 use log::info;
 use pretty_env_logger;
@@ -185,6 +187,8 @@ fn write_matrix_market<W: Write>(
     nrow: usize,
     ncol: usize,
 ) -> io::Result<()> {
+    let mut encoder = GzEncoder::new(writer, Compression::default());
+
     // Create a string buffer to collect all lines
     let mut output = String::new();
 
@@ -199,7 +203,8 @@ fn write_matrix_market<W: Write>(
     }
 
     // Write the entire string buffer to the writer in one go
-    writer.write_all(output.as_bytes())?;
+    encoder.write_all(output.as_bytes())?;
+    encoder.finish()?;
 
     Ok(())
 }
