@@ -8,4 +8,17 @@ Create region x cell matrix from a fragment file.
 f2m -f <fragments.tsv.gz> -b <peaks.bed> -c <cells.txt> -o <matrix.mtx>
 ```
 
-Processes at around 1 second per million lines in the fragment file.
+## Installation
+
+Clone the git repo:
+
+```
+git clone git@github.com:stuart-lab/f2m.git
+cd f2m
+```
+
+Compile:
+
+```
+cargo build --release
+```
