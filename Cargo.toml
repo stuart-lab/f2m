@@ -10,3 +10,7 @@ log = "0.4.22"
 pretty_env_logger = "0.5.0"
 rust-lapper = "1.1.0"
 rustc-hash = "2.0.0"
+tikv-jemallocator = "0.5"
+
+[profile.release]
+panic = "abort"
