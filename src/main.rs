@@ -1,3 +1,5 @@
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::{
     io,
     path::Path,
@@ -17,10 +19,8 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use log::error;
 use log::info;
-use pretty_env_logger;
 use rustc_hash::FxHashMap;
 
-type Iv = Interval<u32, usize>;
 
 fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output_file = matches.get_one::<String>("outfile").unwrap();
     info!("Received output file path: {:?}", output_file);
 
-    fcount(&frag_file, &bed_file, &cell_file, &output_file)?;
+    fcount(&frag_file, &bed_file, &cell_file, output_file)?;
 
     Ok(())
 }
@@ -97,7 +97,7 @@ fn fcount(
     let mut outf = File::create(outfile)?;
     
     // create BED intervals for overlaps with fragment coordinates
-    let peaks = match peak_intervals(bed_file) {
+    let (total_peaks, peaks) = match peak_intervals(bed_file) {
         Ok(trees) => trees,
         Err(e) => {
             error!("Failed to read BED file: {}", e);
@@ -116,8 +116,15 @@ fn fcount(
     }
 
     // HashMap to store counts for peak-cell combinations
-    let mut peak_cell_counts: FxHashMap<(usize, usize), usize> = FxHashMap::default();
+    // hashmap of chromosomes
+    // each entry is a vector of peaks for that chomosome
+    // let mut peak_cell_counts: FxHashMap<(usize, usize), usize> = FxHashMap::default();
 
+    // vector of features
+    // each element is hashmap of cell: count
+    let mut peak_cell_counts: Vec<FxHashMap<usize, u32>> = vec![FxHashMap::<usize, u32>::default(); total_peaks];
+    // println!("Peaks: {:?}", peak_cell_counts.len());
+    
     // iterate over gzip fragments file
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
 
@@ -126,7 +133,9 @@ fn fcount(
     let update_interval = 1_000_000;
 
     let mut line_str = String::new();
-    // let mut cell_barcode = &str::new();
+    let mut startpos: u32;
+    let mut endpos: u32;
+    let mut total_nz: u32 = 0;
 
     loop {
         match reader.read_line(&mut line_str) {
@@ -163,18 +172,20 @@ fn fcount(
 
             // check if the chromosome exists in peaks
             if peaks.contains_key(seqname) {
-                let startpos: u32 = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                let endpos: u32 = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                startpos = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                endpos = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     
                 // find overlapping peaks
                 if let Some(olap_start) = find_overlaps(&peaks, seqname, startpos, startpos+1) {
                     for peak_index in olap_start {
-                        *peak_cell_counts.entry((peak_index, cell_index)).or_insert(0) += 1;
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                        total_nz += 1;
                     }
                 }
                 if let Some(olap_end) = find_overlaps(&peaks, seqname, endpos, endpos+1) {
                     for peak_index in olap_end {
-                        *peak_cell_counts.entry((peak_index, cell_index)).or_insert(0) += 1;
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                        total_nz += 1;
                     }
                 }
             }
@@ -185,16 +196,16 @@ fn fcount(
     // write count matrix
     let num_peaks = peaks.values().map(|lapper| lapper.intervals.len()).sum::<usize>();
     info!("Writing output file: {:?}", outf);
-    write_matrix_market(&mut outf, &peak_cell_counts, num_peaks, cells.len())?; // peaks stored as rows
-    
+    write_matrix_market(&mut outf, &peak_cell_counts, num_peaks, cells.len(), total_nz)?; // peaks stored as rows
     Ok(())
 }
 
 fn write_matrix_market<W: Write>(
     writer: &mut W,
-    peak_cell_counts: &FxHashMap<(usize, usize), usize>,
+    peak_cell_counts: &Vec<FxHashMap<usize, u32>>,
     nrow: usize,
     ncol: usize,
+    nonzero: u32,
 ) -> io::Result<()> {
     let mut encoder = GzEncoder::new(writer, Compression::default());
 
@@ -204,11 +215,13 @@ fn write_matrix_market<W: Write>(
     // Write the header for the Matrix Market format
     output.push_str("%%MatrixMarket matrix coordinate integer general\n");
     output.push_str("%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}\n");
-    output.push_str(&format!("{} {} {}\n", nrow, ncol, peak_cell_counts.len()));
+    output.push_str(&format!("{} {} {}\n", nrow, ncol, nonzero));
 
     // Collect each peak-cell-count entry into the string buffer
-    for ((peak_index, cell_index), count) in peak_cell_counts {
-        output.push_str(&format!("{} {} {}\n", peak_index + 1, cell_index + 1, count)); // +1 to convert 0-based to 1-based indices
+    for (index, hashmap) in peak_cell_counts.iter().enumerate() {
+        for (key, value) in hashmap.iter() {
+            output.push_str(&format!("{} {} {}\n", index + 1, key + 1, value)); // +1 to convert 0-based to 1-based indices
+        }
     }
 
     // Write the entire string buffer to the writer in one go
@@ -232,14 +245,16 @@ fn find_overlaps(
 
 fn peak_intervals(
     bed_file: &Path,
-) -> io::Result<FxHashMap<String, Lapper<u32, usize>>> {
+) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>)> {
     
     // bed file reader
     let file = File::open(bed_file)?;
     let reader = BufReader::new(file);
 
     // chromosome trees
-    let mut chromosome_trees: FxHashMap<String, Vec<Iv>> = FxHashMap::default();
+    // chromosome: vector<interval>
+    let mut chromosome_trees: FxHashMap<String, Vec<Interval<u32, usize>>> = FxHashMap::default();
+    let mut total_peaks = 0;
 
     for (index, line) in reader.lines().enumerate() {
         match line {
@@ -264,6 +279,7 @@ fn peak_intervals(
 
                     let intervals = chromosome_trees.entry(chromosome).or_insert_with(Vec::new);
                     intervals.push(Interval { start, stop: end, val: index });
+                    total_peaks += 1;
                 } else {
                     error!("Line {}: Less than three fields", index + 1);
                 }
@@ -279,5 +295,5 @@ fn peak_intervals(
         .map(|(chr, intervals)| (chr, Lapper::new(intervals)))
         .collect();
 
-    Ok(lapper_map)
+    Ok((total_peaks, lapper_map))
 }
