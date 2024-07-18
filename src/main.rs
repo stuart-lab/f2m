@@ -6,7 +6,6 @@ use std::{
     io::BufReader,
     io::BufRead,
     io::Write,
-    collections::HashMap,
 };
 use clap::{
     Arg,
@@ -19,6 +18,7 @@ use flate2::Compression;
 use log::error;
 use log::info;
 use pretty_env_logger;
+use rustc_hash::FxHashMap;
 
 type Iv = Interval<u32, usize>;
 
@@ -109,27 +109,39 @@ fn fcount(
     let cellreader = File::open(cell_file)
         .map(BufReader::new)?;
     
-    let mut cells: HashMap<String, usize> = HashMap::new();
+    let mut cells: FxHashMap<String, usize> = FxHashMap::default();
     for (index, line) in cellreader.lines().enumerate() {
         let line = line?;
         cells.insert(line.clone(), index);
     }
 
     // HashMap to store counts for peak-cell combinations
-    let mut peak_cell_counts: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut peak_cell_counts: FxHashMap<(usize, usize), usize> = FxHashMap::default();
 
     // iterate over gzip fragments file
-    let reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
+    let mut reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
 
     // Progress counter
     let mut line_count = 0;
     let update_interval = 1_000_000;
 
-    for line in reader.lines() {
-        let line = line?;
+    let mut line_str = String::new();
+    // let mut cell_barcode = &str::new();
+
+    loop {
+        match reader.read_line(&mut line_str) {
+            Ok(0) => break,
+            Ok(_) => {},
+            Err(e) => {
+                error!("Error reading fragment file: {}", e);
+                return Err(e);
+            }
+        }
+        let line = &line_str[..line_str.len() - 1];
 
         // Skip header lines that start with #
         if line.starts_with('#') {
+            line_str.clear();
             continue;
         }
 
@@ -138,7 +150,7 @@ fn fcount(
             print!("\rProcessed {} M fragments", line_count / 1_000_000 );
             std::io::stdout().flush().expect("Can't flush output");
         }
-        
+
         // parse bed entry
         let fields: Vec<&str> = line.split('\t').collect();
 
@@ -167,23 +179,20 @@ fn fcount(
                 }
             }
         }
-
-        // TODO set endpos so we don't need to search all peaks again for next entry
-        // might speed things up
-
+        line_str.clear();
     }
-
+    
     // write count matrix
     let num_peaks = peaks.values().map(|lapper| lapper.intervals.len()).sum::<usize>();
     info!("Writing output file: {:?}", outf);
     write_matrix_market(&mut outf, &peak_cell_counts, num_peaks, cells.len())?; // peaks stored as rows
-
+    
     Ok(())
 }
 
 fn write_matrix_market<W: Write>(
     writer: &mut W,
-    peak_cell_counts: &HashMap<(usize, usize), usize>,
+    peak_cell_counts: &FxHashMap<(usize, usize), usize>,
     nrow: usize,
     ncol: usize,
 ) -> io::Result<()> {
@@ -210,7 +219,7 @@ fn write_matrix_market<W: Write>(
 }
 
 fn find_overlaps(
-    lapper_map: &HashMap<String, Lapper<u32, usize>>, 
+    lapper_map: &FxHashMap<String, Lapper<u32, usize>>, 
     chromosome: &str, 
     start: u32, 
     end: u32
@@ -223,14 +232,14 @@ fn find_overlaps(
 
 fn peak_intervals(
     bed_file: &Path,
-) -> io::Result<HashMap<String, Lapper<u32, usize>>> {
+) -> io::Result<FxHashMap<String, Lapper<u32, usize>>> {
     
     // bed file reader
     let file = File::open(bed_file)?;
     let reader = BufReader::new(file);
 
     // chromosome trees
-    let mut chromosome_trees: HashMap<String, Vec<Iv>> = HashMap::new();
+    let mut chromosome_trees: FxHashMap<String, Vec<Iv>> = FxHashMap::default();
 
     for (index, line) in reader.lines().enumerate() {
         match line {
