@@ -115,15 +115,9 @@ fn fcount(
         cells.insert(line.clone(), index);
     }
 
-    // HashMap to store counts for peak-cell combinations
-    // hashmap of chromosomes
-    // each entry is a vector of peaks for that chomosome
-    // let mut peak_cell_counts: FxHashMap<(usize, usize), usize> = FxHashMap::default();
-
     // vector of features
     // each element is hashmap of cell: count
     let mut peak_cell_counts: Vec<FxHashMap<usize, u32>> = vec![FxHashMap::<usize, u32>::default(); total_peaks];
-    // println!("Peaks: {:?}", peak_cell_counts.len());
     
     // iterate over gzip fragments file
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
@@ -251,8 +245,6 @@ fn peak_intervals(
     let file = File::open(bed_file)?;
     let reader = BufReader::new(file);
 
-    // chromosome trees
-    // chromosome: vector<interval>
     let mut chromosome_trees: FxHashMap<String, Vec<Interval<u32, usize>>> = FxHashMap::default();
     let mut total_peaks = 0;
 
