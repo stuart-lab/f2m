@@ -188,15 +188,14 @@ fn fcount(
     }
     
     // write count matrix
-    let num_peaks = peaks.values().map(|lapper| lapper.intervals.len()).sum::<usize>();
     info!("Writing output file: {:?}", outf);
-    write_matrix_market(&mut outf, &peak_cell_counts, num_peaks, cells.len(), total_nz)?; // peaks stored as rows
+    write_matrix_market(&mut outf, &peak_cell_counts, total_peaks, cells.len(), total_nz)?; // peaks stored as rows
     Ok(())
 }
 
 fn write_matrix_market<W: Write>(
     writer: &mut W,
-    peak_cell_counts: &Vec<FxHashMap<usize, u32>>,
+    peak_cell_counts: &[FxHashMap<usize, u32>],
     nrow: usize,
     ncol: usize,
     nonzero: u32,
