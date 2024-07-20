@@ -93,9 +93,6 @@ fn fcount(
         frag_file, bed_file, cell_file
     );
 
-    // create output file 
-    let mut outf = File::create(outfile)?;
-    
     // create BED intervals for overlaps with fragment coordinates
     let (total_peaks, peaks) = match peak_intervals(bed_file) {
         Ok(trees) => trees,
@@ -129,7 +126,6 @@ fn fcount(
     let mut line_str = String::new();
     let mut startpos: u32;
     let mut endpos: u32;
-    let mut total_nz: u32 = 0;
 
     loop {
         match reader.read_line(&mut line_str) {
@@ -172,14 +168,12 @@ fn fcount(
                 // find overlapping peaks
                 if let Some(olap_start) = find_overlaps(&peaks, seqname, startpos, startpos+1) {
                     for peak_index in olap_start {
-                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                        total_nz += 1;
+                        *peak_cell_counts[peak_index.0].entry(cell_index).or_insert(0) += 1;
                     }
                 }
                 if let Some(olap_end) = find_overlaps(&peaks, seqname, endpos, endpos+1) {
                     for peak_index in olap_end {
-                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                        total_nz += 1;
+                        *peak_cell_counts[peak_index.0].entry(cell_index).or_insert(0) += 1;
                     }
                 }
             }
@@ -188,18 +182,23 @@ fn fcount(
     }
     
     // write count matrix
-    info!("Writing output file: {:?}", outf);
-    write_matrix_market(&mut outf, &peak_cell_counts, total_peaks, cells.len(), total_nz)?; // peaks stored as rows
+    info!("Writing output file: {:?}", &outfile);
+    write_matrix_market(&outfile, &peak_cell_counts, total_peaks, cells.len())?; // peaks stored as rows
     Ok(())
 }
 
-fn write_matrix_market<W: Write>(
-    writer: &mut W,
+fn write_matrix_market(
+    outfile: &String,
     peak_cell_counts: &[FxHashMap<usize, u32>],
     nrow: usize,
     ncol: usize,
-    nonzero: u32,
 ) -> io::Result<()> {
+
+    // get nonzero value count
+    let nonzero: usize = peak_cell_counts.iter().map(|map| map.len()).sum();
+
+    // create output file 
+    let writer = File::create(outfile)?;
     let mut encoder = GzEncoder::new(writer, Compression::default());
 
     // Create a string buffer to collect all lines
@@ -209,15 +208,22 @@ fn write_matrix_market<W: Write>(
     output.push_str("%%MatrixMarket matrix coordinate integer general\n");
     output.push_str("%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}\n");
     output.push_str(&format!("{} {} {}\n", nrow, ncol, nonzero));
+    encoder.write_all(output.as_bytes())?;
+    output.clear();
 
     // Collect each peak-cell-count entry into the string buffer
     for (index, hashmap) in peak_cell_counts.iter().enumerate() {
         for (key, value) in hashmap.iter() {
             output.push_str(&format!("{} {} {}\n", index + 1, key + 1, value)); // +1 to convert 0-based to 1-based indices
         }
+        // write chunk, clear string
+        if index % 5000 == 0 {
+            encoder.write_all(output.as_bytes())?;
+            output.clear();
+        }
     }
 
-    // Write the entire string buffer to the writer in one go
+    // Write the remaining string buffer
     encoder.write_all(output.as_bytes())?;
     encoder.finish()?;
 
@@ -229,9 +235,9 @@ fn find_overlaps(
     chromosome: &str, 
     start: u32, 
     end: u32
-) -> Option<Vec<usize>> {
+) -> Option<Vec<(usize, u32)>> {
     lapper_map.get(chromosome).map(|lapper| {
-        lapper.find(start, end).map(|interval| interval.val).collect()
+        lapper.find(start, end).map(|interval| (interval.val, interval.stop)).collect()
     })
 }
 
