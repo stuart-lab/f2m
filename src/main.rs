@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let matches = Command::new("f2m")
         .version("0.1")
         .author("Tim Stuart")
-        .about("Create a cell x feature matrix")
+        .about("Fragments to matrix: create a feature x cell matrix from a fragment file")
         .arg(
             Arg::new("fragments")
                 .short('f')
@@ -41,21 +41,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             Arg::new("bed")
                 .short('b')
                 .long("bed")
-                .help("BED file containing regions to quantify")
+                .help("BED file containing non-overlapping genomic regions to quantify")
                 .required(true),
         )
         .arg(
             Arg::new("cells")
                 .short('c')
                 .long("cells")
-                .help("List of cells to include")
+                .help("File containing cell barcodes to include")
                 .required(true),
         )
         .arg(
             Arg::new("outdir")
                 .short('o')
                 .long("outdir")
-                .help("Output directory name")
+                .help("Output directory name. Directory will be created if it does not exist.
+The output directory will contain matrix.mtx.gz, features.tsv, barcodes.tsv")
                 .required(true),
         )
         .arg(
