@@ -5,7 +5,7 @@
 Create region x cell matrix from a fragment file.
 
 ```
-f2m -f <fragments.tsv.gz> -b <peaks.bed> -c <cells.txt> -o <matrix.mtx>
+f2m -f <fragments.tsv.gz> -b <peaks.bed> -c <cells.txt> -o <output>
 ```
 
 ## Installation
