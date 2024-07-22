@@ -2,6 +2,7 @@
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::{
     io,
+    fs,
     path::Path,
     error::Error,
     fs::File,
@@ -51,10 +52,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .required(true),
         )
         .arg(
-            Arg::new("outfile")
+            Arg::new("outdir")
                 .short('o')
-                .long("outfile")
-                .help("Output file name")
+                .long("outdir")
+                .help("Output directory name")
                 .required(true),
         )
         .arg(
@@ -80,13 +81,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         .expect("Can't find path to input cell file");
     info!("Received cell file: {:?}", cell_file);
 
-    let output_file = matches.get_one::<String>("outfile").unwrap();
-    info!("Received output file path: {:?}", output_file);
+    let output_directory = matches.get_one::<String>("outdir").unwrap();
+    info!("Received output directory: {:?}", output_directory);
 
     let group = matches.get_flag("group");
     info!("Grouping peaks: {:?}", group);
 
-    fcount(&frag_file, &bed_file, &cell_file, output_file, group)?;
+    let output_path = Path::new(output_directory);
+
+    // Create the directory if it does not exist
+    if !output_path.exists() {
+        if let Err(e) = fs::create_dir_all(output_path) {
+            eprintln!("Failed to create output directory: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    // make sure output is a directory
+    match fs::metadata(output_path) {
+        Ok(metadata) => {
+            if metadata.is_dir() {
+                info!("{:?} is a directory.", output_path);
+            } else {
+                eprintln!("Provided output is not a directory: {}", output_path.display());
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to get metadata for {:?}: {}", output_path, e);
+            std::process::exit(1);
+        }
+    }
+
+    fcount(&frag_file, &bed_file, &cell_file, output_path, group)?;
 
     Ok(())
 }
@@ -95,7 +122,7 @@ fn fcount(
     frag_file: &Path,
     bed_file: &Path,
     cell_file: &Path,
-    outfile: &String,
+    output: &Path,
     group: bool,
 ) -> io::Result<()> {
     info!(
@@ -104,7 +131,14 @@ fn fcount(
     );
 
     // create BED intervals for overlaps with fragment coordinates
-    let (total_peaks, peaks) = match peak_intervals(bed_file, group) {
+    // returns hashmap with each key being chromosome name
+    // each value is intervals for that chromosome
+    // interval value gives the index of the feature
+    // also writes features to output directory to avoid second iteration of file
+    // write features
+    let feature_path = output.join("features.tsv");
+    info!("Writing output feature file: {:?}", &feature_path);
+    let (total_peaks, peaks) = match peak_intervals(bed_file, group, &feature_path) {
         Ok(trees) => trees,
         Err(e) => {
             error!("Failed to read BED file: {}", e);
@@ -202,13 +236,34 @@ fn fcount(
     }
     
     // write count matrix
-    info!("Writing output file: {:?}", &outfile);
-    write_matrix_market(&outfile, &peak_cell_counts, total_peaks, cells.len())?; // peaks stored as rows
+    let counts_path = output.join("matrix.mtx.gz");
+    info!("Writing output counts file: {:?}", &counts_path);
+    write_matrix_market(&counts_path, &peak_cell_counts, total_peaks, cells.len())
+        .expect("Failed to write matrix"); // features stored as rows
+
+    // write cells
+    let cell_path = output.join("barcodes.tsv");
+    info!("Writing output cells file: {:?}", &cell_path);
+    write_cells(&cell_path, cell_file)
+        .expect("Failed to write cells");
+
+    Ok(())
+}
+
+fn write_cells(
+    outfile: &Path,
+    cells: &Path,
+) -> io::Result<()> {
+    // Copy cell barcodes to output directory
+    match fs::copy(&cells, &outfile) {
+        Ok(bytes_copied) => info!("Successfully copied {} bytes.", bytes_copied),
+        Err(e) => eprintln!("Failed to copy file: {}", e),
+    }
     Ok(())
 }
 
 fn write_matrix_market(
-    outfile: &String,
+    outfile: &Path,
     peak_cell_counts: &[FxHashMap<usize, u32>],
     nrow: usize,
     ncol: usize,
@@ -217,7 +272,7 @@ fn write_matrix_market(
     // get nonzero value count
     let nonzero: usize = peak_cell_counts.iter().map(|map| map.len()).sum();
 
-    // create output file 
+    // create output file
     let writer = File::create(outfile)?;
     let mut encoder = GzEncoder::new(writer, Compression::default());
 
@@ -264,7 +319,11 @@ fn find_overlaps(
 fn peak_intervals(
     bed_file: &Path,
     group: bool,
+    outfile: &Path,
 ) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>)> {
+
+    // feature file
+    let mut writer = File::create(outfile)?;
     
     // bed file reader
     let file = File::open(bed_file)?;
@@ -303,7 +362,7 @@ fn peak_intervals(
                         }
                     };
 
-                    let intervals = chromosome_trees.entry(chromosome).or_insert_with(Vec::new);
+                    let intervals = chromosome_trees.entry(chromosome.clone()).or_insert_with(Vec::new);
 
                     if group && (fields.len() >= 4) {
                         let peakgroup: String = match fields[3].parse() {
@@ -314,7 +373,8 @@ fn peak_intervals(
                             }
                         };
 
-                        let group_index = peak_group_index.entry(peakgroup).or_insert_with(|| {
+                        let group_index = peak_group_index.entry(peakgroup.clone()).or_insert_with(|| {
+                            writeln!(writer, "{}", peakgroup).expect("Failed to write");
                             let idx: usize = current_index;
                             current_index += 1;
                             idx
@@ -323,6 +383,7 @@ fn peak_intervals(
                         intervals.push(Interval { start, stop: end, val: *group_index });
                     } else {
                         intervals.push(Interval { start, stop: end, val: index });
+                        writeln!(writer, "{}-{}-{}", chromosome, start, end)?;
                     }
                     total_peaks += 1;
                 } else {
