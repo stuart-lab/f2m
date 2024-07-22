@@ -57,6 +57,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .help("Output file name")
                 .required(true),
         )
+        .arg(
+            Arg::new("group")
+                .long("group")
+                .help("Group peaks by variable in fourth BED column")
+                .action(clap::ArgAction::SetTrue),
+        )
         .get_matches();
 
     let frag_file = Path::new(matches.get_one::<String>("fragments").unwrap())
@@ -77,7 +83,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output_file = matches.get_one::<String>("outfile").unwrap();
     info!("Received output file path: {:?}", output_file);
 
-    fcount(&frag_file, &bed_file, &cell_file, output_file)?;
+    let group = matches.get_flag("group");
+    info!("Grouping peaks: {:?}", group);
+
+    fcount(&frag_file, &bed_file, &cell_file, output_file, group)?;
 
     Ok(())
 }
@@ -87,6 +96,7 @@ fn fcount(
     bed_file: &Path,
     cell_file: &Path,
     outfile: &String,
+    group: bool,
 ) -> io::Result<()> {
     info!(
         "Processing fragment file: {:?}, BED file: {:?}, Cell file: {:?}",
@@ -94,7 +104,7 @@ fn fcount(
     );
 
     // create BED intervals for overlaps with fragment coordinates
-    let (total_peaks, peaks) = match peak_intervals(bed_file) {
+    let (total_peaks, peaks) = match peak_intervals(bed_file, group) {
         Ok(trees) => trees,
         Err(e) => {
             error!("Failed to read BED file: {}", e);
@@ -251,17 +261,26 @@ fn find_overlaps(
     })
 }
 
-
 fn peak_intervals(
     bed_file: &Path,
+    group: bool,
 ) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>)> {
     
     // bed file reader
     let file = File::open(bed_file)?;
     let reader = BufReader::new(file);
-
+    
+    // hashmap of peak intervals for each chromosome
     let mut chromosome_trees: FxHashMap<String, Vec<Interval<u32, usize>>> = FxHashMap::default();
-    let mut total_peaks = 0;
+    
+    // Store peak group name and corresponding index
+    let mut peak_group_index: FxHashMap<String, usize> = FxHashMap::default();
+    
+    // track total number of peaks
+    let mut total_peaks: usize = 0;
+
+    // index for peak groups
+    let mut current_index: usize = 0;
 
     for (index, line) in reader.lines().enumerate() {
         match line {
@@ -285,7 +304,26 @@ fn peak_intervals(
                     };
 
                     let intervals = chromosome_trees.entry(chromosome).or_insert_with(Vec::new);
-                    intervals.push(Interval { start, stop: end, val: index });
+
+                    if group && (fields.len() >= 4) {
+                        let peakgroup: String = match fields[3].parse() {
+                            Ok(num) => num,
+                            Err(_) => {
+                                error!("Line {}: Failed to parse group information", index + 1);
+                                continue;
+                            }
+                        };
+
+                        let group_index = peak_group_index.entry(peakgroup).or_insert_with(|| {
+                            let idx: usize = current_index;
+                            current_index += 1;
+                            idx
+                        });
+
+                        intervals.push(Interval { start, stop: end, val: *group_index });
+                    } else {
+                        intervals.push(Interval { start, stop: end, val: index });
+                    }
                     total_peaks += 1;
                 } else {
                     error!("Line {}: Less than three fields", index + 1);
@@ -301,6 +339,10 @@ fn peak_intervals(
     let lapper_map = chromosome_trees.into_iter()
         .map(|(chr, intervals)| (chr, Lapper::new(intervals)))
         .collect();
+
+    if group {
+        total_peaks = current_index;
+    }
 
     Ok((total_peaks, lapper_map))
 }
