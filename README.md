@@ -29,3 +29,5 @@ Compile:
 ```
 cargo build --release
 ```
+
+Pre-compiled binaries are also available in the release.
