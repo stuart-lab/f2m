@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
 
     let matches = Command::new("cellselect")
-        .version("0.1")
+        .version("1.0")
         .author("Tim Stuart")
         .about("Select cells from fragment file according to total number of fragments")
         .arg(

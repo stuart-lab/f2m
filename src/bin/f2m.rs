@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
 
     let matches = Command::new("f2m")
-        .version("0.1")
+        .version("1.0")
         .author("Tim Stuart")
         .about("Fragments to matrix: create a feature x cell matrix from a fragment file")
         .arg(
