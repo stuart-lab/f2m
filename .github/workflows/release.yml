@@ -1,3 +1,5 @@
+name: Deploy
+
 on:
   release:
     types: [created]
