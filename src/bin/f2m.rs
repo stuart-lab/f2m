@@ -3,6 +3,8 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::{
     io,
     fs,
+    thread,
+    sync::mpsc,
     path::Path,
     error::Error,
     fs::File,
@@ -16,12 +18,15 @@ use clap::{
 };
 use rust_lapper::{Interval, Lapper};
 use flate2::read::MultiGzDecoder;
-use flate2::write::GzEncoder;
 use flate2::Compression;
 use log::error;
 use log::info;
 use rustc_hash::FxHashMap;
-
+use gzp::{
+    deflate::Gzip,
+    ZWriter,
+    par::compress::{ParCompress, ParCompressBuilder},
+};
 
 fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
@@ -60,6 +65,15 @@ The output directory will contain matrix.mtx.gz, features.tsv, barcodes.tsv")
                 .required(true),
         )
         .arg(
+            Arg::new("threads")
+                .short('t')
+                .long("threads")
+                .help("Number of compression threads to use")
+                .value_parser(clap::value_parser!(usize))
+                .default_value("4")
+                .required(false),
+        )
+        .arg(
             Arg::new("group")
                 .long("group")
                 .help("Group peaks by variable in fourth BED column")
@@ -90,6 +104,8 @@ The output directory will contain matrix.mtx.gz, features.tsv, barcodes.tsv")
 
     let output_path = Path::new(output_directory);
 
+    let num_threads = *matches.get_one::<usize>("threads").unwrap();
+
     // Create the directory if it does not exist
     if !output_path.exists() {
         if let Err(e) = fs::create_dir_all(output_path) {
@@ -114,8 +130,8 @@ The output directory will contain matrix.mtx.gz, features.tsv, barcodes.tsv")
         }
     }
 
-    fcount(&frag_file, &bed_file, &cell_file, output_path, group)?;
-
+    fcount(&frag_file, &bed_file, &cell_file, output_path, group, num_threads)?;
+    
     Ok(())
 }
 
@@ -125,6 +141,7 @@ fn fcount(
     cell_file: &Path,
     output: &Path,
     group: bool,
+    num_threads: usize,
 ) -> io::Result<()> {
     info!(
         "Processing fragment file: {:?}, BED file: {:?}, Cell file: {:?}",
@@ -137,9 +154,9 @@ fn fcount(
     // interval value gives the index of the feature
     // also writes features to output directory to avoid second iteration of file
     // write features
-    let feature_path = output.join("features.tsv");
+    let feature_path = output.join("features.tsv.gz");
     info!("Writing output feature file: {:?}", &feature_path);
-    let (total_peaks, peaks) = match peak_intervals(bed_file, group, &feature_path) {
+    let (total_peaks, peaks) = match peak_intervals(bed_file, group, &feature_path, num_threads) {
         Ok(trees) => trees,
         Err(e) => {
             error!("Failed to read BED file: {}", e);
@@ -161,85 +178,69 @@ fn fcount(
     // each element is hashmap of cell: count
     let mut peak_cell_counts: Vec<FxHashMap<usize, u32>> = vec![FxHashMap::<usize, u32>::default(); total_peaks];
     
-    // iterate over gzip fragments file
-    let mut reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
+    // Create a channel for communication between the decompression and processing threads
+    let (tx, rx) = mpsc::channel();
 
-    // Progress counter
+    // Spawn the decompression thread
+    let frag_file = frag_file.to_path_buf();
+    let decompress_handle = thread::spawn(move || {
+        let reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file).expect("Failed to open fragment file")));
+        for line in reader.lines() {
+            let line = line.expect("Failed to read line");
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+
+    // Processing logic on the main thread
     let mut line_count = 0;
     let update_interval = 1_000_000;
 
-    let mut line_str = String::new();
-    let mut startpos: u32;
-    let mut endpos: u32;
-    let mut check_end: bool;
-
-    loop {
-        match reader.read_line(&mut line_str) {
-            Ok(0) => break,
-            Ok(_) => {},
-            Err(e) => {
-                error!("Error reading fragment file: {}", e);
-                return Err(e);
-            }
-        }
-        let line = &line_str[..line_str.len() - 1];
+    for line in rx {
 
         // Skip header lines that start with #
         if line.starts_with('#') {
-            line_str.clear();
             continue;
         }
 
         line_count += 1;
         if line_count % update_interval == 0 {
-            print!("\rProcessed {} M fragments", line_count / 1_000_000 );
+            print!("\rProcessed {} M fragments", line_count / 1_000_000);
             std::io::stdout().flush().expect("Can't flush output");
         }
 
-        // parse bed entry
+        // Parse BED entry
         let fields: Vec<&str> = line.split('\t').collect();
 
-        // check if cell is to be included
+        // Check if cell is to be included
         let cell_barcode: &str = fields[3];
         if let Some(&cell_index) = cells.get(cell_barcode) {
-            check_end = true;
-
-            // create intervals from fragment entry
             let seqname: &str = fields[0];
+            let startpos: u32 = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let endpos: u32 = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-            // check if the chromosome exists in peaks
-            if peaks.contains_key(seqname) {
-                startpos = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                endpos = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    
-                if let Some(olap_start) = find_overlaps(&peaks, seqname, startpos, startpos+1) {
+            if let Some(overlaps) = find_overlaps(&peaks, seqname, startpos, endpos) {
+                for (peak_index, peak_end) in overlaps {
+                    *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
 
-                    for peak_index in olap_start {
-                        *peak_cell_counts[peak_index.0].entry(cell_index).or_insert(0) += 1;
-
-                        // check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
-                        if endpos < peak_index.1 {
-                            check_end = false;
-                            *peak_cell_counts[peak_index.0].entry(cell_index).or_insert(0) += 1;
-                        }
-                    }
-                }
-                if check_end {
-                    if let Some(olap_end) = find_overlaps(&peaks, seqname, endpos, endpos+1) {
-                        for peak_index in olap_end {
-                            *peak_cell_counts[peak_index.0].entry(cell_index).or_insert(0) += 1;
-                        }
+                    // If fragment end is behind peak end, overlap is complete
+                    if endpos < peak_end {
+                        break;
                     }
                 }
             }
         }
-        line_str.clear();
     }
+    
+    // Wait for the decompression thread to finish
+    decompress_handle.join().expect("Decompression thread panicked");
     
     // write count matrix
     let counts_path = output.join("matrix.mtx.gz");
     info!("Writing output counts file: {:?}", &counts_path);
-    write_matrix_market(&counts_path, &peak_cell_counts, total_peaks, cells.len())
+    write_matrix_market(&counts_path, &peak_cell_counts, total_peaks, cells.len(), num_threads)
         .expect("Failed to write matrix"); // features stored as rows
 
     // write cells
@@ -268,6 +269,7 @@ fn write_matrix_market(
     peak_cell_counts: &[FxHashMap<usize, u32>],
     nrow: usize,
     ncol: usize,
+    num_threads: usize,
 ) -> io::Result<()> {
 
     // get nonzero value count
@@ -275,7 +277,11 @@ fn write_matrix_market(
 
     // create output file
     let writer = File::create(outfile)?;
-    let mut encoder = GzEncoder::new(writer, Compression::default());
+    let mut encoder: ParCompress<Gzip> = ParCompressBuilder::new()
+        .compression_level(Compression::default())  // Set compression level
+        .num_threads(num_threads)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))? 
+        .from_writer(writer);
 
     // Create a string buffer to collect all lines
     let mut output = String::new();
@@ -300,8 +306,11 @@ fn write_matrix_market(
     }
 
     // Write the remaining string buffer
-    encoder.write_all(output.as_bytes())?;
-    encoder.finish()?;
+    if !output.is_empty() {
+        encoder.write_all(output.as_bytes())?;
+    }
+
+    encoder.finish().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
     Ok(())
 }
@@ -321,10 +330,16 @@ fn peak_intervals(
     bed_file: &Path,
     group: bool,
     outfile: &Path,
+    num_threads: usize,
 ) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>)> {
 
     // feature file
-    let mut writer = File::create(outfile)?;
+    let writer = File::create(outfile)?;
+    let mut writer: ParCompress<Gzip> = ParCompressBuilder::new()
+        .compression_level(Compression::default())
+        .num_threads(num_threads)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+        .from_writer(writer);
     
     // bed file reader
     let file = File::open(bed_file)?;
@@ -405,6 +420,9 @@ fn peak_intervals(
     if group {
         total_peaks = current_index;
     }
+
+    // Finalize the compression, converting GzpError to io::Error
+    writer.finish().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
     Ok((total_peaks, lapper_map))
 }
