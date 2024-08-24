@@ -13,6 +13,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::BufRead;
 use std::io::Write;
+use std::thread;
+use std::sync::mpsc;
 use flate2::read::MultiGzDecoder;
 use rustc_hash::FxHashMap;
 use clap::{Arg, Command};
@@ -111,31 +113,49 @@ fn count_barcodes(frag_file: &Path,) -> io::Result<FxHashMap<String, usize>> {
     // hashmap for cell barcode counts
     let mut cells: FxHashMap<String, usize> = FxHashMap::default();
 
-    // iterate over gzip fragments file
-    let mut reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
+    // Create a channel for communication between the decompression and processing threads
+    let (tx, rx) = mpsc::channel();
+
+    // Spawn the decompression thread
+    let frag_file = frag_file.to_path_buf();
+    let decompress_handle = thread::spawn(move || {
+        let reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file).expect("Failed to open fragment file")));
+        for line in reader.lines() {
+            let line = line.expect("Failed to read line");
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    // // iterate over gzip fragments file
+    // let mut reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
 
     // Progress counter
     let mut line_count = 0;
     let update_interval = 1_000_000;
 
-    let mut line_str = String::new();
+    // let mut line_str = String::new();
 
-    loop {
-        line_str.clear();
-        match reader.read_line(&mut line_str) {
-            Ok(0) => break,
-            Ok(_) => {},
-            Err(e) => {
-                error!("Error reading fragment file: {}", e);
-                return Err(e);
-            }
-        }
+    for line in rx {
 
-        let line = &line_str[..line_str.len() - 1];
+
+    // loop {
+    //     line_str.clear();
+        // match reader.read_line(&mut line_str) {
+        //     Ok(0) => break,
+        //     Ok(_) => {},
+        //     Err(e) => {
+        //         error!("Error reading fragment file: {}", e);
+        //         return Err(e);
+        //     }
+        // }
+
+        // let line = &line_str[..line_str.len() - 1];
 
         // Skip header lines that start with #
         if line.starts_with('#') {
-            line_str.clear();
+            // line_str.clear();
             continue;
         }
 
