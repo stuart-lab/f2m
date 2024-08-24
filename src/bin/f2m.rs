@@ -203,6 +203,7 @@ fn fcount(
     // Processing logic on the main thread
     let mut line_count = 0;
     let update_interval = 1_000_000;
+    let mut check_end: bool;
 
     for line in rx {
 
@@ -223,17 +224,33 @@ fn fcount(
         // Check if cell is to be included
         let cell_barcode: &str = fields[3];
         if let Some(&cell_index) = cells.get(cell_barcode) {
+            check_end = true;
+
+            // create intervals from fragment entry
             let seqname: &str = fields[0];
-            let startpos: u32 = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            let endpos: u32 = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-            if let Some(overlaps) = find_overlaps(&peaks, seqname, startpos, endpos) {
-                for (peak_index, peak_end) in overlaps {
-                    *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+            if peaks.contains_key(seqname) {
 
-                    // If fragment end is behind peak end, overlap is complete
-                    if endpos < peak_end {
-                        break;
+                let startpos: u32 = fields[1].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let endpos: u32 = fields[2].parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    
+                if let Some(olap_start) = find_overlaps(&peaks, seqname, startpos, startpos+1) {
+
+                    for (peak_index, peak_end) in olap_start {
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+    
+                        // check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
+                        if endpos < peak_end {
+                            check_end = false;
+                            *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                        }
+                    }
+                }
+                if check_end {
+                    if let Some(olap_end) = find_overlaps(&peaks, seqname, endpos, endpos+1) {
+                        for (peak_index, _peak_end) in olap_end {
+                            *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                        }
                     }
                 }
             }
