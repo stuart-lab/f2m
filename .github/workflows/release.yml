@@ -1,5 +1,8 @@
 name: Release
-on: push  # testing
+on: 
+  push:
+    tags:
+      - v[0-9]+.*
 
 jobs:
   release:
