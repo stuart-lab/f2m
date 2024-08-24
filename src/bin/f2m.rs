@@ -1,5 +1,11 @@
+#[cfg(not(target_os = "windows"))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(target_os = "windows")]
+#[global_allocator]
+static GLOBAL: std::alloc::System = std::alloc::System;
+
 use std::{
     io,
     fs,
