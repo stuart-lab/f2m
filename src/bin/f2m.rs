@@ -202,7 +202,7 @@ fn fcount(
     });
 
     // Processing logic on the main thread
-    let mut line_count = 0;
+    let mut line_count: u64 = 0;
     let update_interval = 1_000_000;
     let mut check_end: bool;
 
@@ -257,6 +257,7 @@ fn fcount(
             }
         }
     }
+    println!();
     
     // Wait for the decompression thread to finish
     decompress_handle.join().expect("Decompression thread panicked");
@@ -382,8 +383,12 @@ fn peak_intervals(
     let mut current_index: usize = 0;
 
     for (index, line) in reader.lines().enumerate() {
+
         match line {
             Ok(line) => {
+                if line.starts_with('#') {
+                    continue;
+                }
                 let fields: Vec<&str> = line.split('\t').collect();
                 if fields.len() >= 3 {
                     let chromosome = fields[0].to_string();

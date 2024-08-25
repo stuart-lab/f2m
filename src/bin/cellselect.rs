@@ -128,7 +128,7 @@ fn count_barcodes(frag_file: &Path,) -> io::Result<FxHashMap<String, usize>> {
     });
 
     // Progress counter
-    let mut line_count = 0;
+    let mut line_count: u64 = 0;
     let update_interval = 1_000_000;
 
     for line in rx {
@@ -153,6 +153,7 @@ fn count_barcodes(frag_file: &Path,) -> io::Result<FxHashMap<String, usize>> {
             *cells.entry(cell_barcode).or_insert(0) += 1;
         }
     }
+    println!();
 
     // Join thread to ensure it completes
     decompress_handle.join().expect("Failed to join decompression thread");
