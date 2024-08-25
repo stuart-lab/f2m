@@ -18,7 +18,6 @@ use std::sync::mpsc;
 use flate2::read::MultiGzDecoder;
 use rustc_hash::FxHashMap;
 use clap::{Arg, Command};
-use log::error;
 use log::info;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -114,7 +113,7 @@ fn count_barcodes(frag_file: &Path,) -> io::Result<FxHashMap<String, usize>> {
     let mut cells: FxHashMap<String, usize> = FxHashMap::default();
 
     // Create a channel for communication between the decompression and processing threads
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(500);
 
     // Spawn the decompression thread
     let frag_file = frag_file.to_path_buf();
@@ -128,34 +127,14 @@ fn count_barcodes(frag_file: &Path,) -> io::Result<FxHashMap<String, usize>> {
         }
     });
 
-    // // iterate over gzip fragments file
-    // let mut reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
-
     // Progress counter
     let mut line_count = 0;
     let update_interval = 1_000_000;
 
-    // let mut line_str = String::new();
-
     for line in rx {
-
-
-    // loop {
-    //     line_str.clear();
-        // match reader.read_line(&mut line_str) {
-        //     Ok(0) => break,
-        //     Ok(_) => {},
-        //     Err(e) => {
-        //         error!("Error reading fragment file: {}", e);
-        //         return Err(e);
-        //     }
-        // }
-
-        // let line = &line_str[..line_str.len() - 1];
 
         // Skip header lines that start with #
         if line.starts_with('#') {
-            // line_str.clear();
             continue;
         }
 
@@ -174,6 +153,9 @@ fn count_barcodes(frag_file: &Path,) -> io::Result<FxHashMap<String, usize>> {
             *cells.entry(cell_barcode).or_insert(0) += 1;
         }
     }
+
+    // Join thread to ensure it completes
+    decompress_handle.join().expect("Failed to join decompression thread");
 
     Ok(cells)
 }
