@@ -177,7 +177,7 @@ fn fcount(
     let mut cells: FxHashMap<String, usize> = FxHashMap::default();
     for (index, line) in cellreader.lines().enumerate() {
         let line = line?;
-        cells.insert(line.clone(), index);
+        cells.insert(line, index);
     }
 
     // vector of features
@@ -185,12 +185,14 @@ fn fcount(
     let mut peak_cell_counts: Vec<FxHashMap<usize, u32>> = vec![FxHashMap::<usize, u32>::default(); total_peaks];
     
     // Create a channel for communication between the decompression and processing threads
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(500);
 
     // Spawn the decompression thread
     let frag_file = frag_file.to_path_buf();
+
     let decompress_handle = thread::spawn(move || {
-        let reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file).expect("Failed to open fragment file")));
+        let reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)
+            .expect("Failed to open fragment file")));
         for line in reader.lines() {
             let line = line.expect("Failed to read line");
             if tx.send(line).is_err() {
@@ -198,7 +200,6 @@ fn fcount(
             }
         }
     });
-
 
     // Processing logic on the main thread
     let mut line_count = 0;
