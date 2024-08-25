@@ -382,11 +382,15 @@ fn peak_intervals(
     // index for peak groups
     let mut current_index: usize = 0;
 
+    // skipped lines
+    let mut skipped_lines: usize = 0;
+
     for (index, line) in reader.lines().enumerate() {
 
         match line {
             Ok(line) => {
                 if line.starts_with('#') {
+                    skipped_lines += 1;
                     continue;
                 }
                 let fields: Vec<&str> = line.split('\t').collect();
@@ -420,14 +424,14 @@ fn peak_intervals(
 
                         let group_index = peak_group_index.entry(peakgroup.clone()).or_insert_with(|| {
                             writeln!(writer, "{}", peakgroup).expect("Failed to write");
-                            let idx: usize = current_index;
+                            let idx: usize = current_index - skipped_lines;
                             current_index += 1;
                             idx
                         });
 
                         intervals.push(Interval { start, stop: end, val: *group_index });
                     } else {
-                        intervals.push(Interval { start, stop: end, val: index });
+                        intervals.push(Interval { start, stop: end, val: index - skipped_lines});
                         writeln!(writer, "{}-{}-{}", chromosome, start, end)?;
                     }
                     total_peaks += 1;
