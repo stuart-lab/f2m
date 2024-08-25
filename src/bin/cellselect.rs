@@ -146,6 +146,7 @@ fn count_barcodes(frag_file: &Path,) -> io::Result<FxHashMap<String, usize>> {
             *cells.entry(cell_barcode).or_insert(0) += 1;
         }
     }
+    println!();
 
     Ok(cells)
 }

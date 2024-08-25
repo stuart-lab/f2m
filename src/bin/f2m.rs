@@ -235,6 +235,7 @@ fn fcount(
         }
         line_str.clear();
     }
+    println!();
     
     // write count matrix
     let counts_path = output.join("matrix.mtx.gz");
