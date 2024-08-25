@@ -343,8 +343,12 @@ fn peak_intervals(
     let mut current_index: usize = 0;
 
     for (index, line) in reader.lines().enumerate() {
+
         match line {
             Ok(line) => {
+                if line.starts_with('#') {
+                    continue;
+                }
                 let fields: Vec<&str> = line.split('\t').collect();
                 if fields.len() >= 3 {
                     let chromosome = fields[0].to_string();
