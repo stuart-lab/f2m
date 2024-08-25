@@ -107,7 +107,7 @@ fn count_barcodes(frag_file: &Path,) -> io::Result<FxHashMap<String, usize>> {
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(frag_file)?));
 
     // Progress counter
-    let mut line_count = 0;
+    let mut line_count: u64 = 0;
     let update_interval = 1_000_000;
 
     let mut line_str = String::new();
