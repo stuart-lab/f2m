@@ -1,9 +1,8 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use flate2::read::MultiGzDecoder;
 use rustc_hash::FxHashSet;
-use std::io::Write;
 use clap::ArgMatches;
 
 pub fn run(matches: &ArgMatches) -> std::io::Result<()> {
@@ -37,20 +36,46 @@ fn filter_fragments<P: AsRef<Path>>(
     fragments_path: P,
     cell_barcodes: &FxHashSet<String>,
 ) -> std::io::Result<()> {
-    // Open the fragment file (gzipped)
     let fragments_file = File::open(fragments_path)?;
-    let fragments_reader = BufReader::new(MultiGzDecoder::new(fragments_file));
+    let mut fragments_reader = BufReader::with_capacity(1024 * 1024, MultiGzDecoder::new(fragments_file));
 
-    // Use stdout for writing uncompressed data
     let stdout = std::io::stdout();
     let mut output_writer = stdout.lock();
 
-    for line in fragments_reader.lines() {
-        let line = line?;
-        let fields: Vec<&str> = line.split('\t').collect();
+    let mut line_count: u64 = 0;
+    let mut buffer = String::with_capacity(1024);
 
-        if fields.len() > 3 && cell_barcodes.contains(fields[3]) {
-            writeln!(output_writer, "{}", line)?;
+    loop {
+        buffer.clear();
+        match fragments_reader.read_line(&mut buffer) {
+            Ok(0) => break, // End of file
+            Ok(_) => {
+                // Remove trailing newline
+                if buffer.ends_with('\n') {
+                    buffer.pop();
+                }
+                if buffer.ends_with('\r') {
+                    buffer.pop();
+                }
+
+                // Skip comment lines
+                if buffer.starts_with('#') {
+                    continue;
+                }
+
+                if let Some(barcode) = buffer.split('\t').nth(3) {
+                    if cell_barcodes.contains(barcode) {
+                        writeln!(output_writer, "{}", buffer)?;
+                    }
+                }
+
+                line_count += 1;
+                if line_count % 1_000_000 == 0 {
+                    eprint!("\rProcessed {} M lines", line_count / 1_000_000);
+                    std::io::stderr().flush().expect("Can't flush stderr");
+                }
+            }
+            Err(e) => return Err(e),
         }
     }
 
