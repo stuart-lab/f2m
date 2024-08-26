@@ -1,11 +1,3 @@
-#[cfg(not(target_os = "windows"))]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
-#[cfg(target_os = "windows")]
-#[global_allocator]
-static GLOBAL: std::alloc::System = std::alloc::System;
-
 use std::io;
 use std::error::Error;
 use std::path::Path;
@@ -17,41 +9,9 @@ use std::thread;
 use std::sync::mpsc;
 use flate2::read::MultiGzDecoder;
 use rustc_hash::FxHashMap;
-use clap::{Arg, Command};
 use log::info;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    pretty_env_logger::init();
-
-    let matches = Command::new("cellselect")
-        .version("1.0")
-        .author("Tim Stuart")
-        .about("Select cells from fragment file according to total number of fragments")
-        .arg(
-            Arg::new("fragments")
-                .short('f')
-                .long("fragments")
-                .value_name("FILE")
-                .help("Path to the fragment file")
-                .required(true),
-        )
-        .arg(
-            Arg::new("outfile")
-                .short('o')
-                .long("outfile")
-                .value_name("FILE")
-                .help("Name of output file. Will contain each cell barcodes and its total count")
-                .required(true),
-        )
-        .arg(
-            Arg::new("threshold")
-                .short('t')
-                .long("threshold")
-                .value_name("NUMBER")
-                .help("Sets the threshold value for filtering cell barcodes")
-                .default_value("200"),
-        )
-        .get_matches();
+pub fn cellselect(matches: &clap::ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let frag_file = Path::new(matches.get_one::<String>("fragments").unwrap())
         .canonicalize()

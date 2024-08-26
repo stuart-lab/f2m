@@ -1,11 +1,3 @@
-#[cfg(not(target_os = "windows"))]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
-#[cfg(target_os = "windows")]
-#[global_allocator]
-static GLOBAL: std::alloc::System = std::alloc::System;
-
 use std::{
     io,
     fs,
@@ -17,10 +9,6 @@ use std::{
     io::BufReader,
     io::BufRead,
     io::Write,
-};
-use clap::{
-    Arg,
-    Command
 };
 use rust_lapper::{Interval, Lapper};
 use flate2::read::MultiGzDecoder;
@@ -34,58 +22,7 @@ use gzp::{
     par::compress::{ParCompress, ParCompressBuilder},
 };
 
-fn main() -> Result<(), Box<dyn Error>> {
-    pretty_env_logger::init();
-
-    let matches = Command::new("f2m")
-        .version("1.0")
-        .author("Tim Stuart")
-        .about("Fragments to matrix: create a feature x cell matrix from a fragment file")
-        .arg(
-            Arg::new("fragments")
-                .short('f')
-                .long("fragments")
-                .help("Path to the fragment file")
-                .required(true),
-        )
-        .arg(
-            Arg::new("bed")
-                .short('b')
-                .long("bed")
-                .help("BED file containing non-overlapping genomic regions to quantify")
-                .required(true),
-        )
-        .arg(
-            Arg::new("cells")
-                .short('c')
-                .long("cells")
-                .help("File containing cell barcodes to include")
-                .required(true),
-        )
-        .arg(
-            Arg::new("outdir")
-                .short('o')
-                .long("outdir")
-                .help("Output directory name. Directory will be created if it does not exist.
-The output directory will contain matrix.mtx.gz, features.tsv, barcodes.tsv")
-                .required(true),
-        )
-        .arg(
-            Arg::new("threads")
-                .short('t')
-                .long("threads")
-                .help("Number of compression threads to use")
-                .value_parser(clap::value_parser!(usize))
-                .default_value("4")
-                .required(false),
-        )
-        .arg(
-            Arg::new("group")
-                .long("group")
-                .help("Group peaks by variable in fourth BED column")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .get_matches();
+pub fn f2m(matches: &clap::ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let frag_file = Path::new(matches.get_one::<String>("fragments").unwrap())
         .canonicalize()

@@ -1,5 +1,5 @@
 [package]
-name = "f2m"
+name = "fragtk"
 version = "1.0.0"
 edition = "2021"
 
@@ -15,3 +15,7 @@ tikv-jemallocator = "0.5"
 
 [profile.release]
 panic = "abort"
+
+[[bin]]
+name = "fragtk"
+path = "src/main.rs"
