@@ -11,6 +11,7 @@ use std::error::Error;
 
 mod f2m;
 mod cellselect;
+mod filter;
 
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -48,8 +49,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Arg::new("outdir")
                         .short('o')
                         .long("outdir")
-                        .help("Output directory name. Directory will be created if it does not exist.
-        The output directory will contain matrix.mtx.gz, features.tsv, barcodes.tsv")
+                        .help("Output directory name")
+                        .long_help("Output directory name. Directory will be created if it does not exist. \
+                               The output directory will contain matrix.mtx.gz, features.tsv, barcodes.tsv")
                         .required(true),
                 )
                 .arg(
@@ -84,7 +86,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .short('o')
                     .long("outfile")
                     .value_name("FILE")
-                    .help("Name of output file. Will contain each cell barcodes and its total count")
+                    .help("Name of output file")
+                    .long_help(
+                        "Name of output file. The file will contain each cell barcode \
+                        and its total fragment count, tab-separated."
+                    )
                     .required(true),
             )
             .arg(
@@ -92,9 +98,34 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .short('t')
                     .long("threshold")
                     .value_name("NUMBER")
-                    .help("Sets the threshold value for filtering cell barcodes")
+                    .help("Minimum number of fragments for a cell to be included")
+                    .long_help(
+                        "Sets the minimum number of fragments a cell must have to be included in the output. \
+                        Cells with fewer fragments than this threshold will be filtered out."
+                    )
                     .default_value("200"),
             )
+        )
+        .subcommand(
+            Command::new("filter")
+                .about(
+                    "Subset a fragment file to include only specified cell barcodes. \
+                    Output is uncompressed data written to stdout"
+                )
+                .arg(
+                    Arg::new("fragments")
+                        .short('f')
+                        .long("fragments")
+                        .help("Path to the fragment file")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("cells")
+                        .short('c')
+                        .long("cells")
+                        .help("File containing cell barcodes to include")
+                        .required(true),
+                )
         )
         .get_matches();
 
@@ -103,6 +134,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     match matches.subcommand() {
         Some(("matrix", sub_matches)) => f2m::f2m(sub_matches)?,
         Some(("count", sub_matches)) => cellselect::cellselect(sub_matches)?,
+        Some(("filter", sub_matches)) => filter::run(sub_matches)?,
         _ => {
 
         }
