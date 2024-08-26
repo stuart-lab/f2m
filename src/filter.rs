@@ -3,9 +3,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use flate2::read::MultiGzDecoder;
 use rustc_hash::FxHashSet;
-use clap::ArgMatches;
 
-pub fn run(matches: &ArgMatches) -> std::io::Result<()> {
+pub fn run(matches: &clap::ArgMatches) -> std::io::Result<()> {
     // Get file paths from command-line arguments
     let cells_file = matches.get_one::<String>("cells").unwrap();
     let fragments_file = matches.get_one::<String>("fragments").unwrap();
