@@ -13,6 +13,7 @@ use flate2::read::MultiGzDecoder;
 use flate2::Compression;
 use log::error;
 use log::info;
+use log::warn;
 use rustc_hash::FxHashMap;
 use gzp::{
     deflate::Gzip,
@@ -171,7 +172,8 @@ fn fcount(
                 startpos = match fields[1].trim().parse() {
                     Ok(num) => num,
                     Err(e) => {
-                        eprintln!("Failed to parse start position: {:?}. Error: {}", line, e);
+                        warn!("Failed to parse start position: {:?}. Error: {}", line_count, e);
+                        line_str.clear();
                         continue;
                     }
                 };
@@ -179,7 +181,8 @@ fn fcount(
                 endpos = match fields[2].trim().parse() {
                     Ok(num) => num,
                     Err(e) => {
-                        eprintln!("Failed to parse end position: {:?}. Error: {}", line, e);
+                        warn!("Failed to parse end position: {:?}. Error: {}", line_count, e);
+                        line_str.clear();
                         continue;
                     }
                 };
