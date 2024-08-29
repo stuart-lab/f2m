@@ -297,15 +297,6 @@ fn write_matrix_market(
     Ok(())
 }
 
-// fn find_overlaps<'a>(
-//     lapper: &'a mut Lapper<u32, usize>,
-//     start: u32,
-//     stop: u32,
-//     cursor: &mut usize
-// ) -> impl Iterator<Item = &'a Interval<u32, usize>> {
-//     lapper.seek(start, stop, cursor)
-// }
-
 fn peak_intervals(
     bed_file: &Path,
     group: bool,
