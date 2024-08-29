@@ -133,6 +133,7 @@ fn fcount(
     let mut current_chrom = String::new();
     let mut current_lapper: Option<&mut Lapper<u32, usize>> = None;
     let mut cursor: usize = 0;
+    let mut check_end: bool;
 
     loop {
 
@@ -164,6 +165,7 @@ fn fcount(
         // Check if cell is to be included
         let cell_barcode: &str = fields[3];
         if let Some(&cell_index) = cells.get(cell_barcode) {
+            check_end = true;
 
             // create intervals from fragment entry
             let seqname: &str = fields[0];
@@ -193,24 +195,35 @@ fn fcount(
                 }
             };
 
-            let mut check_end = true;
             if let Some(lapper) = &mut current_lapper {
-                for interval in lapper.seek(startpos, startpos + 1, &mut cursor) {
-                    let peak_index = interval.val;
-                    let peak_end = interval.stop;
-                    *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-
-                    // Check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
-                    if endpos < peak_end {
-                        check_end = false;
-                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                    }
-                }
-
-                if check_end {
-                    for interval in lapper.seek(endpos, endpos + 1, &mut cursor) {
+                // seems to be a problem if lapper is one element with seek
+                if lapper.intervals.len() == 1 {
+                    // use find
+                    for interval in lapper.find(startpos, startpos + 1) {
                         let peak_index = interval.val;
                         *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                    }
+                    for interval in lapper.find(endpos, endpos + 1) {
+                        let peak_index = interval.val;
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                    }
+                } else {
+                    for interval in lapper.seek(startpos, startpos + 1, &mut cursor) {
+                        let peak_index = interval.val;
+                        let peak_end = interval.stop;
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+
+                        // Check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
+                        if endpos < peak_end {
+                            check_end = false;
+                            *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                        }
+                    }
+                    if check_end {
+                        for interval in lapper.seek(endpos, endpos + 1, &mut cursor) {
+                            let peak_index = interval.val;
+                            *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                        }
                     }
                 }
             }
