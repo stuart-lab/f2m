@@ -98,7 +98,7 @@ fn fcount(
     // write features
     let feature_path = output.join("features.tsv.gz");
     info!("Writing output feature file: {:?}", &feature_path);
-    let (total_peaks, peaks) = match peak_intervals(bed_file, group, &feature_path, num_threads) {
+    let (total_peaks, mut peaks) = match peak_intervals(bed_file, group, &feature_path, num_threads) {
         Ok(trees) => trees,
         Err(e) => {
             error!("Failed to read BED file: {}", e);
@@ -126,10 +126,13 @@ fn fcount(
 
     let mut line_count: u64 = 0;
     let update_interval = 1_000_000;
-    let mut check_end: bool;
     let mut line_str = String::new();
     let mut startpos: u32;
     let mut endpos: u32;
+
+    let mut current_chrom = String::new();
+    let mut current_lapper: Option<&mut Lapper<u32, usize>> = None;
+    let mut cursor: usize = 0;
 
     loop {
 
@@ -161,49 +164,53 @@ fn fcount(
         // Check if cell is to be included
         let cell_barcode: &str = fields[3];
         if let Some(&cell_index) = cells.get(cell_barcode) {
-            check_end = true;
 
             // create intervals from fragment entry
             let seqname: &str = fields[0];
 
-            if peaks.contains_key(seqname) {
+            if seqname != current_chrom {
+                current_chrom = seqname.to_string();
+                current_lapper = peaks.get_mut(&current_chrom);
+                cursor = 0;
+            }
 
-                // try to parse the coordinates, skip the line if parsing fails
-                startpos = match fields[1].trim().parse() {
-                    Ok(num) => num,
-                    Err(e) => {
-                        warn!("Failed to parse start position: {:?}. Error: {}", line_count, e);
-                        line_str.clear();
-                        continue;
-                    }
-                };
-                
-                endpos = match fields[2].trim().parse() {
-                    Ok(num) => num,
-                    Err(e) => {
-                        warn!("Failed to parse end position: {:?}. Error: {}", line_count, e);
-                        line_str.clear();
-                        continue;
-                    }
-                };
-    
-                if let Some(olap_start) = find_overlaps(&peaks, seqname, startpos, startpos+1) {
+            // try to parse the coordinates, skip the line if parsing fails
+            startpos = match fields[1].trim().parse() {
+                Ok(num) => num,
+                Err(e) => {
+                    warn!("Failed to parse start position: {:?}. Error: {}", line_count, e);
+                    line_str.clear();
+                    continue;
+                }
+            };
+            
+            endpos = match fields[2].trim().parse() {
+                Ok(num) => num,
+                Err(e) => {
+                    warn!("Failed to parse end position: {:?}. Error: {}", line_count, e);
+                    line_str.clear();
+                    continue;
+                }
+            };
 
-                    for (peak_index, peak_end) in olap_start {
+            let mut check_end = true;
+            if let Some(lapper) = &mut current_lapper {
+                for interval in lapper.seek(startpos, startpos + 1, &mut cursor) {
+                    let peak_index = interval.val;
+                    let peak_end = interval.stop;
+                    *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+
+                    // Check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
+                    if endpos < peak_end {
+                        check_end = false;
                         *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-    
-                        // check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
-                        if endpos < peak_end {
-                            check_end = false;
-                            *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                        }
                     }
                 }
+
                 if check_end {
-                    if let Some(olap_end) = find_overlaps(&peaks, seqname, endpos, endpos+1) {
-                        for (peak_index, _peak_end) in olap_end {
-                            *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                        }
+                    for interval in lapper.seek(endpos, endpos + 1, &mut cursor) {
+                        let peak_index = interval.val;
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
                     }
                 }
             }
@@ -290,16 +297,14 @@ fn write_matrix_market(
     Ok(())
 }
 
-fn find_overlaps(
-    lapper_map: &FxHashMap<String, Lapper<u32, usize>>, 
-    chromosome: &str, 
-    start: u32, 
-    end: u32
-) -> Option<Vec<(usize, u32)>> {
-    lapper_map.get(chromosome).map(|lapper| {
-        lapper.find(start, end).map(|interval| (interval.val, interval.stop)).collect()
-    })
-}
+// fn find_overlaps<'a>(
+//     lapper: &'a mut Lapper<u32, usize>,
+//     start: u32,
+//     stop: u32,
+//     cursor: &mut usize
+// ) -> impl Iterator<Item = &'a Interval<u32, usize>> {
+//     lapper.seek(start, stop, cursor)
+// }
 
 fn peak_intervals(
     bed_file: &Path,
