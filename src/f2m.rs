@@ -196,34 +196,26 @@ fn fcount(
             };
 
             if let Some(lapper) = &mut current_lapper {
-                // seems to be a problem if lapper is one element with seek
+                // seems to be a problem with seek if lapper has one element
+                // set cursor to 0
                 if lapper.intervals.len() == 1 {
-                    // use find
-                    for interval in lapper.find(startpos, startpos + 1) {
-                        let peak_index = interval.val;
-                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                    }
-                    for interval in lapper.find(endpos, endpos + 1) {
-                        let peak_index = interval.val;
-                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                    }
-                } else {
-                    for interval in lapper.seek(startpos, startpos + 1, &mut cursor) {
-                        let peak_index = interval.val;
-                        let peak_end = interval.stop;
-                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                    cursor = 0;
+                }
+                for interval in lapper.seek(startpos, startpos + 1, &mut cursor) {
+                    let peak_index = interval.val;
+                    let peak_end = interval.stop;
+                    *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
 
-                        // Check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
-                        if endpos < peak_end {
-                            check_end = false;
-                            *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                        }
+                    // Check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
+                    if endpos < peak_end {
+                        check_end = false;
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
                     }
-                    if check_end {
-                        for interval in lapper.seek(endpos, endpos + 1, &mut cursor) {
-                            let peak_index = interval.val;
-                            *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
-                        }
+                }
+                if check_end {
+                    for interval in lapper.seek(endpos, endpos + 1, &mut cursor) {
+                        let peak_index = interval.val;
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
                     }
                 }
             }
