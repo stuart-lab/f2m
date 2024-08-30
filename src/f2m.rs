@@ -110,15 +110,16 @@ fn fcount(
     let cellreader = File::open(cell_file)
         .map(BufReader::new)?;
     
-    let mut cells: FxHashMap<String, usize> = FxHashMap::default();
+    let mut cells: FxHashMap<String, u32> = FxHashMap::default();
     for (index, line) in cellreader.lines().enumerate() {
         let line = line?;
-        cells.insert(line, index);
+        let index_u32 = index as u32;
+        cells.insert(line, index_u32);
     }
 
     // vector of features
     // each element is hashmap of cell: count
-    let mut peak_cell_counts: Vec<FxHashMap<usize, u32>> = vec![FxHashMap::<usize, u32>::default(); total_peaks];
+    let mut peak_cell_counts: Vec<FxHashMap<u32, u32>> = vec![FxHashMap::<u32, u32>::default(); total_peaks];
 
     // frag file reading
     let frag_file = File::open(frag_file)?;
@@ -253,7 +254,7 @@ fn write_cells(
 
 fn write_matrix_market(
     outfile: &Path,
-    peak_cell_counts: &[FxHashMap<usize, u32>],
+    peak_cell_counts: &[FxHashMap<u32, u32>],
     nrow: usize,
     ncol: usize,
     num_threads: usize,
