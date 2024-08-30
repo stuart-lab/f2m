@@ -275,7 +275,7 @@ fn write_matrix_market(
 
     // Write the header for the Matrix Market format
     output.push_str("%%MatrixMarket matrix coordinate integer general\n");
-    output.push_str("%%metadata json: {{\"software_version\": \"f2m-0.1.0\"}}\n");
+    output.push_str("%%metadata json: {{\"software_version\": \"fragtk-1.1.0\"}}\n");
     output.push_str(&format!("{} {} {}\n", nrow, ncol, nonzero));
     encoder.write_all(output.as_bytes())?;
     output.clear();
