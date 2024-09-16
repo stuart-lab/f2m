@@ -43,6 +43,9 @@ pub fn f2m(matches: &clap::ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let group = matches.get_flag("group");
     info!("Grouping peaks: {:?}", group);
+    
+    let weight = matches.get_one::<usize>("weight").copied();
+    info!("Peak weight column: {:?}", weight); 
 
     let output_path = Path::new(output_directory);
 
@@ -72,7 +75,7 @@ pub fn f2m(matches: &clap::ArgMatches) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    fcount(&frag_file, &bed_file, &cell_file, output_path, group, num_threads)?;
+    fcount(&frag_file, &bed_file, &cell_file, output_path, group, weight, num_threads)?;
     
     Ok(())
 }
@@ -83,6 +86,7 @@ fn fcount(
     cell_file: &Path,
     output: &Path,
     group: bool,
+    weight: Option<usize>, 
     num_threads: usize,
 ) -> io::Result<()> {
     info!(
@@ -90,15 +94,10 @@ fn fcount(
         frag_file, bed_file, cell_file
     );
 
-    // create BED intervals for overlaps with fragment coordinates
-    // returns hashmap with each key being chromosome name
-    // each value is intervals for that chromosome
-    // interval value gives the index of the feature
-    // also writes features to output directory to avoid second iteration of file
-    // write features
     let feature_path = output.join("features.tsv.gz");
     info!("Writing output feature file: {:?}", &feature_path);
-    let (total_peaks, mut peaks) = match peak_intervals(bed_file, group, &feature_path, num_threads) {
+   
+    let (total_peaks, mut peaks, indpeak) = match peak_intervals(bed_file, group, weight, &feature_path, num_threads) {
         Ok(trees) => trees,
         Err(e) => {
             error!("Failed to read BED file: {}", e);
@@ -109,7 +108,7 @@ fn fcount(
     // create hashmap for cell barcodes
     let cellreader = File::open(cell_file)
         .map(BufReader::new)?;
-    
+    // cell barcode, cell index 
     let mut cells: FxHashMap<String, u32> = FxHashMap::default();
     for (index, line) in cellreader.lines().enumerate() {
         let line = line?;
@@ -117,9 +116,10 @@ fn fcount(
         cells.insert(line, index_u32);
     }
 
-    // vector of features
-    // each element is hashmap of cell: count
-    let mut peak_cell_counts: Vec<FxHashMap<u32, u32>> = vec![FxHashMap::<u32, u32>::default(); total_peaks];
+    // vector of features // each element is hashmap of cell: count (is float)
+    let mut peak_cell_counts: Vec<FxHashMap<u32, f32>> = vec![FxHashMap::<u32, f32>::default(); total_peaks];
+    // peak_cell_counts is a vector containing total_peaks(usize) of elements
+    // each element is initialised to an empty FxHashMap with key type u32 (cell index) and count (f32) 
 
     // frag file reading
     let frag_file = File::open(frag_file)?;
@@ -203,20 +203,21 @@ fn fcount(
                     cursor = 0;
                 }
                 for interval in lapper.seek(startpos, startpos + 1, &mut cursor) {
-                    let peak_index = interval.val;
+                    let Some(&(peak_index, peak_weight)) = indpeak.get(&interval.val) else { todo!() };
                     let peak_end = interval.stop;
-                    *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                    *peak_cell_counts[peak_index].entry(cell_index).or_insert(0.0) += peak_weight;
 
                     // Check if fragment end is behind peak end (if so, it overlaps and we don't need a full search)
                     if endpos < peak_end {
                         check_end = false;
-                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0.0) += peak_weight;
                     }
                 }
                 if check_end {
                     for interval in lapper.seek(endpos, endpos + 1, &mut cursor) {
-                        let peak_index = interval.val;
-                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0) += 1;
+                        //let peak_index = interval.val;
+                        let Some(&(peak_index, peak_weight)) = indpeak.get(&interval.val) else { todo!() };
+                        *peak_cell_counts[peak_index].entry(cell_index).or_insert(0.0) += peak_weight;
                     }
                 }
             }
@@ -254,7 +255,7 @@ fn write_cells(
 
 fn write_matrix_market(
     outfile: &Path,
-    peak_cell_counts: &[FxHashMap<u32, u32>],
+    peak_cell_counts: &[FxHashMap<u32, f32>],
     nrow: usize,
     ncol: usize,
     num_threads: usize,
@@ -306,9 +307,10 @@ fn write_matrix_market(
 fn peak_intervals(
     bed_file: &Path,
     group: bool,
+    weight:Option<usize>, 
     outfile: &Path,
     num_threads: usize,
-) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>)> {
+) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>, FxHashMap<usize, (usize, f32)>)> {
 
     // feature file
     let writer = File::create(outfile)?;
@@ -327,7 +329,10 @@ fn peak_intervals(
     
     // Store peak group name and corresponding index
     let mut peak_group_index: FxHashMap<String, usize> = FxHashMap::default();
-    
+
+    // store index and (peak index, weight)
+    let mut ind_peak: FxHashMap<usize, (usize, f32)> = FxHashMap::default();
+
     // track total number of peaks
     let mut total_peaks: usize = 0;
 
@@ -364,7 +369,22 @@ fn peak_intervals(
                     };
 
                     let intervals = chromosome_trees.entry(chromosome.clone()).or_insert_with(Vec::new);
-
+                    
+                    let mut peak_weight = 1.0; // Default weight 
+                    //Update peak weight if weight_column is specified
+                    if let Some(column_number) = weight {
+                        if fields.len() > column_number{
+                            //info!("Line {}: Reading weight from column {}: {}", index + 1, column_number, fields[column_number]);
+                            match fields[column_number].parse() { //change column number here 
+                                Ok(num) => peak_weight = num, 
+                                Err(_) => {
+                                    error!("Line {}: Failed to parse weight value", index + 1);
+                                    continue;  
+                                }
+                            }
+                        }
+                    }
+                    
                     if group && (fields.len() >= 4) {
                         let peakgroup: String = match fields[3].parse() {
                             Ok(num) => num,
@@ -381,9 +401,12 @@ fn peak_intervals(
                             idx
                         });
 
-                        intervals.push(Interval { start, stop: end, val: *group_index });
+                        intervals.push(Interval { start, stop: end, val:  index});
+                        ind_peak.insert(index, (*group_index, peak_weight));
+                            
                     } else {
-                        intervals.push(Interval { start, stop: end, val: index - skipped_lines});
+                        intervals.push(Interval { start, stop: end, val: index});
+                        ind_peak.insert(index, (index - skipped_lines, peak_weight));
                         writeln!(writer, "{}-{}-{}", chromosome, start, end)?;
                     }
                     total_peaks += 1;
@@ -409,5 +432,5 @@ fn peak_intervals(
     // Finalize the compression, converting GzpError to io::Error
     writer.finish().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    Ok((total_peaks, lapper_map))
+    Ok((total_peaks, lapper_map, ind_peak))
 }
