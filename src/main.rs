@@ -69,6 +69,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .help("Group peaks by variable in fourth BED column")
                         .action(ArgAction::SetTrue),
                 )
+                .arg(
+                    Arg::new("weight")
+                        .long("weight")
+                        .help("Assign weight to peak by column number given")
+                        .value_parser(clap::value_parser!(usize))
+                        .required(false),
+                )
         )
         .subcommand(
             Command::new("count")
