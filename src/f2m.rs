@@ -41,12 +41,12 @@ pub fn f2m(matches: &clap::ArgMatches) -> Result<(), Box<dyn Error>> {
     let output_directory = matches.get_one::<String>("outdir").unwrap();
     info!("Received output directory: {:?}", output_directory);
 
-    let group = matches.get_flag("group");
+    let group =matches.get_one::<usize>("group").copied();
     info!("Grouping peaks: {:?}", group);
-    
-    let weight = matches.get_one::<usize>("weight").copied();
-    info!("Peak weight column: {:?}", weight); 
 
+    let weight = matches.get_one::<usize>("weight").copied();
+    info!("Peak weight column: {:?}", weight);
+  
     let output_path = Path::new(output_directory);
 
     let num_threads = *matches.get_one::<usize>("threads").unwrap();
@@ -85,26 +85,32 @@ fn fcount(
     bed_file: &Path,
     cell_file: &Path,
     output: &Path,
-    group: bool,
+    group: Option<usize>,
     weight: Option<usize>, 
     num_threads: usize,
+    
 ) -> io::Result<()> {
     info!(
         "Processing fragment file: {:?}, BED file: {:?}, Cell file: {:?}",
         frag_file, bed_file, cell_file
     );
 
+    // create BED intervals for overlaps with fragment coordinates
+    // returns hashmap with each key being chromosome name
+    // each value is intervals for that chromosome
+    // interval value gives the index of the feature
+    // also writes features to output directory to avoid second iteration of file
+    // write features
     let feature_path = output.join("features.tsv.gz");
     info!("Writing output feature file: {:?}", &feature_path);
    
-    let (total_peaks, mut peaks, indpeak) = match peak_intervals(bed_file, group, weight, &feature_path, num_threads) {
+    let (total_peaks, mut peaks, peak_vec) = match peak_intervals(bed_file, group, weight, &feature_path, num_threads) {
         Ok(trees) => trees,
         Err(e) => {
             error!("Failed to read BED file: {}", e);
             return Err(e);
         }
     };
-
     // create hashmap for cell barcodes
     let cellreader = File::open(cell_file)
         .map(BufReader::new)?;
@@ -116,11 +122,9 @@ fn fcount(
         cells.insert(line, index_u32);
     }
 
-    // vector of features // each element is hashmap of cell: count (is float)
+    // vector of features
+    // each element is hashmap of cell: count (is float)
     let mut peak_cell_counts: Vec<FxHashMap<u32, f32>> = vec![FxHashMap::<u32, f32>::default(); total_peaks];
-    // peak_cell_counts is a vector containing total_peaks(usize) of elements
-    // each element is initialised to an empty FxHashMap with key type u32 (cell index) and count (f32) 
-
     // frag file reading
     let frag_file = File::open(frag_file)?;
     let mut reader = BufReader::with_capacity(1024 * 1024, MultiGzDecoder::new(frag_file));
@@ -137,7 +141,6 @@ fn fcount(
     let mut check_end: bool;
 
     loop {
-
         match reader.read_line(&mut line_str) {
             Ok(0) => break,
             Ok(_) => {},
@@ -148,7 +151,7 @@ fn fcount(
         }
         let line = &line_str[..line_str.len() - 1];
 
-        // Skip header lines that start with #
+        // # Skip header lines that start with #
         if line.starts_with('#') {
             line_str.clear();
             continue;
@@ -203,7 +206,8 @@ fn fcount(
                     cursor = 0;
                 }
                 for interval in lapper.seek(startpos, startpos + 1, &mut cursor) {
-                    let Some(&(peak_index, peak_weight)) = indpeak.get(&interval.val) else { todo!() };
+                    
+                    let (peak_index, peak_weight) = peak_vec[interval.val];
                     let peak_end = interval.stop;
                     *peak_cell_counts[peak_index].entry(cell_index).or_insert(0.0) += peak_weight;
 
@@ -215,8 +219,7 @@ fn fcount(
                 }
                 if check_end {
                     for interval in lapper.seek(endpos, endpos + 1, &mut cursor) {
-                        //let peak_index = interval.val;
-                        let Some(&(peak_index, peak_weight)) = indpeak.get(&interval.val) else { todo!() };
+                        let (peak_index, peak_weight) = peak_vec[interval.val];
                         *peak_cell_counts[peak_index].entry(cell_index).or_insert(0.0) += peak_weight;
                     }
                 }
@@ -306,11 +309,11 @@ fn write_matrix_market(
 
 fn peak_intervals(
     bed_file: &Path,
-    group: bool,
+    group: Option<usize>,
     weight:Option<usize>, 
     outfile: &Path,
     num_threads: usize,
-) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>, FxHashMap<usize, (usize, f32)>)> {
+) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>, Vec<(usize, f32)>)>{ 
 
     // feature file
     let writer = File::create(outfile)?;
@@ -331,7 +334,8 @@ fn peak_intervals(
     let mut peak_group_index: FxHashMap<String, usize> = FxHashMap::default();
 
     // store index and (peak index, weight)
-    let mut ind_peak: FxHashMap<usize, (usize, f32)> = FxHashMap::default();
+    let mut ind_peak: Vec<(usize, f32)> = Vec::new();
+    // let mut ind_peak: FxHashMap<usize, (usize, f32)> = FxHashMap::default();
 
     // track total number of peaks
     let mut total_peaks: usize = 0;
@@ -369,12 +373,12 @@ fn peak_intervals(
                     };
 
                     let intervals = chromosome_trees.entry(chromosome.clone()).or_insert_with(Vec::new);
+                    // changes: add in weight_value 
                     
                     let mut peak_weight = 1.0; // Default weight 
-                    //Update peak weight if weight_column is specified
+                    // Update peak weight if weigh_column is specified
                     if let Some(column_number) = weight {
                         if fields.len() > column_number{
-                            //info!("Line {}: Reading weight from column {}: {}", index + 1, column_number, fields[column_number]);
                             match fields[column_number].parse() { //change column number here 
                                 Ok(num) => peak_weight = num, 
                                 Err(_) => {
@@ -385,31 +389,35 @@ fn peak_intervals(
                         }
                     }
                     
-                    if group && (fields.len() >= 4) {
-                        let peakgroup: String = match fields[3].parse() {
-                            Ok(num) => num,
-                            Err(_) => {
-                                error!("Line {}: Failed to parse group information", index + 1);
-                                continue;
-                            }
-                        };
+                    if let Some(group_col) = group{
+                        if fields.len() > group_col {
+                            let peakgroup: String = match fields[group_col].parse() {
+                                Ok(num) => num,
+                                Err(_) => {
+                                    error!("Line {}: Failed to parse group information", index + 1);
+                                    continue;
+                                }
+                            };
 
-                        let group_index = peak_group_index.entry(peakgroup.clone()).or_insert_with(|| {
-                            writeln!(writer, "{}", peakgroup).expect("Failed to write");
-                            let idx: usize = current_index - skipped_lines;
-                            current_index += 1;
-                            idx
-                        });
+                            let group_index = peak_group_index.entry(peakgroup.clone()).or_insert_with(|| {
+                                writeln!(writer, "{}", peakgroup).expect("Failed to write");
+                                let idx: usize = current_index - skipped_lines;
+                                current_index += 1;
+                                idx
+                            });
 
-                        intervals.push(Interval { start, stop: end, val:  index});
-                        ind_peak.insert(index, (*group_index, peak_weight));
-                            
-                    } else {
-                        intervals.push(Interval { start, stop: end, val: index});
-                        ind_peak.insert(index, (index - skipped_lines, peak_weight));
+                            intervals.push(Interval {start, stop: end, val: total_peaks});
+                            ind_peak.push((*group_index, peak_weight)); 
+                                
+                    } else { 
+                            error!("Line {}: Group Column not found", index +1 );
+                        } 
+                    }else {
+                        intervals.push(Interval { start, stop: end, val: total_peaks});
+                        ind_peak.push((index-skipped_lines, peak_weight));
                         writeln!(writer, "{}-{}-{}", chromosome, start, end)?;
                     }
-                    total_peaks += 1;
+                    total_peaks += 1; // corresponds to if fields.len() >= 3 {
                 } else {
                     error!("Line {}: Less than three fields", index + 1);
                 }
@@ -425,7 +433,10 @@ fn peak_intervals(
         .map(|(chr, intervals)| (chr, Lapper::new(intervals)))
         .collect();
 
-    if group {
+    print!("\rTotal No. Peaks {} before change: ", total_peaks);
+    std::io::stdout().flush().expect("Can't flush output1");
+    
+    if group.is_some() { 
         total_peaks = current_index;
     }
 
