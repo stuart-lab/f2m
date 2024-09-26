@@ -6,7 +6,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: std::alloc::System = std::alloc::System;
 
-use clap::{Command, Arg};
+use clap::{Command, Arg}; //, ArgAction};
 use std::error::Error;
 
 mod f2m;
@@ -63,20 +63,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .default_value("4")
                         .required(false),
                 )
-               .arg(
+                .arg(
                     Arg::new("group")
                         .long("group")
                         .help("Group peaks by variable in indicated BED column")
                         .value_parser(clap::value_parser!(usize))
+                    //.action(ArgAction::SetTrue),
                         .required(false),
                 )
+             //changes start 
                 .arg(
                     Arg::new("weight")
                         .long("weight")
-                        .help("Assign weight to peak by column number given")
+                        .help("Assign weight to peak by variable in indicated BED column")
                         .value_parser(clap::value_parser!(usize))
                         .required(false),
-                )
+                ) // changes end 
         )
         .subcommand(
             Command::new("count")
