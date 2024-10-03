@@ -41,12 +41,11 @@ pub fn f2m(matches: &clap::ArgMatches) -> Result<(), Box<dyn Error>> {
     let output_directory = matches.get_one::<String>("outdir").unwrap();
     info!("Received output directory: {:?}", output_directory);
 
-    let group =matches.get_one::<usize>("group").copied();// matches.get_flag("group");
+    let group =matches.get_one::<usize>("group").copied();
     info!("Grouping peaks: {:?}", group);
-    //changes start 
+    
     let weight = matches.get_one::<usize>("weight").copied();
     info!("Peak weight column: {:?}", weight);
-    //changes end
 
     let output_path = Path::new(output_directory);
 
@@ -87,7 +86,7 @@ fn fcount(
     cell_file: &Path,
     output: &Path,
     group: Option<usize>,
-    weight: Option<usize>, // change option usize to u8 (this is just the column number) 
+    weight: Option<usize>, 
     num_threads: usize,
     
 ) -> io::Result<()> {
@@ -438,16 +437,15 @@ fn peak_intervals(
         }
     }
 
-    let lapper_map: FxHashMap<String, Lapper<u32, usize>> = chromosome_trees.into_iter()
+    let lapper_map = chromosome_trees.into_iter()
         .map(|(chr, intervals)| (chr, Lapper::new(intervals)))
         .collect();
 
-    info!("\rTotal No. Peaks {} before change: ", total_peaks);
-    assert_eq!(ind_peak.len(), total_peaks, "Length of ind_peak ({}) does not match total_peaks ({})", ind_peak.len(), total_peaks);
-    let total_intervals: usize = lapper_map.values().map(|lapper| lapper.len()).sum();
-    assert_eq!(total_intervals, total_peaks, "Total number of intervals in lapper_map ({}) does not match total_peaks ({})", total_intervals, total_peaks);
-
-    if group.is_some() { 
+    // I need to know if the total number of peaks is correct ()
+    print!("\rTotal No. Peaks {} before change: ", total_peaks);
+    std::io::stdout().flush().expect("Can't flush output1");
+    
+    if group.is_some() { // ohh if the group=True change total _peaks to current_index (only incremented in group) 
         total_peaks = current_index;
     }
 
