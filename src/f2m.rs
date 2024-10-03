@@ -429,13 +429,15 @@ fn peak_intervals(
         }
     }
 
-    let lapper_map = chromosome_trees.into_iter()
+    let lapper_map: FxHashMap<String, Lapper<u32, usize>> = chromosome_trees.into_iter()
         .map(|(chr, intervals)| (chr, Lapper::new(intervals)))
         .collect();
 
-    print!("\rTotal No. Peaks {} before change: ", total_peaks);
-    std::io::stdout().flush().expect("Can't flush output1");
-    
+    info!("\rTotal No. Peaks {} before change: ", total_peaks);
+    assert_eq!(ind_peak.len(), total_peaks, "Length of ind_peak ({}) does not match total_peaks ({})", ind_peak.len(), total_peaks);
+    let total_intervals: usize = lapper_map.values().map(|lapper| lapper.len()).sum();
+    assert_eq!(total_intervals, total_peaks, "Total number of intervals in lapper_map ({}) does not match total_peaks ({})", total_intervals, total_peaks);
+
     if group.is_some() { 
         total_peaks = current_index;
     }
