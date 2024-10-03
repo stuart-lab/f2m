@@ -41,12 +41,13 @@ pub fn f2m(matches: &clap::ArgMatches) -> Result<(), Box<dyn Error>> {
     let output_directory = matches.get_one::<String>("outdir").unwrap();
     info!("Received output directory: {:?}", output_directory);
 
-    let group =matches.get_one::<usize>("group").copied();
+    let group =matches.get_one::<usize>("group").copied();// matches.get_flag("group");
     info!("Grouping peaks: {:?}", group);
-
+    //changes start 
     let weight = matches.get_one::<usize>("weight").copied();
     info!("Peak weight column: {:?}", weight);
-  
+    //changes end
+
     let output_path = Path::new(output_directory);
 
     let num_threads = *matches.get_one::<usize>("threads").unwrap();
@@ -86,7 +87,7 @@ fn fcount(
     cell_file: &Path,
     output: &Path,
     group: Option<usize>,
-    weight: Option<usize>, 
+    weight: Option<usize>, // change option usize to u8 (this is just the column number) 
     num_threads: usize,
     
 ) -> io::Result<()> {
@@ -125,6 +126,9 @@ fn fcount(
     // vector of features
     // each element is hashmap of cell: count (is float)
     let mut peak_cell_counts: Vec<FxHashMap<u32, f32>> = vec![FxHashMap::<u32, f32>::default(); total_peaks];
+    // peak_cell_counts is a vector containing total_peaks(usize) of elements
+    // each element is initialised to an empty FxHashMap with key type u32 (cell index) and count (f32) 
+
     // frag file reading
     let frag_file = File::open(frag_file)?;
     let mut reader = BufReader::with_capacity(1024 * 1024, MultiGzDecoder::new(frag_file));
@@ -206,7 +210,9 @@ fn fcount(
                     cursor = 0;
                 }
                 for interval in lapper.seek(startpos, startpos + 1, &mut cursor) {
-                    
+                    //vector.get[] safer way 
+                    // let Some(&(peak_index, peak_weight)) = peakVec.get(interval.val) else { todo!() };
+                    // Vector[index] more risky way but faster since it doesnt involve wrapping the result in an option
                     let (peak_index, peak_weight) = peak_vec[interval.val];
                     let peak_end = interval.stop;
                     *peak_cell_counts[peak_index].entry(cell_index).or_insert(0.0) += peak_weight;
@@ -219,6 +225,7 @@ fn fcount(
                 }
                 if check_end {
                     for interval in lapper.seek(endpos, endpos + 1, &mut cursor) {
+                        //let peak_index = interval.val;
                         let (peak_index, peak_weight) = peak_vec[interval.val];
                         *peak_cell_counts[peak_index].entry(cell_index).or_insert(0.0) += peak_weight;
                     }
@@ -313,7 +320,7 @@ fn peak_intervals(
     weight:Option<usize>, 
     outfile: &Path,
     num_threads: usize,
-) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>, Vec<(usize, f32)>)>{ 
+) -> io::Result<(usize, FxHashMap<String, Lapper<u32, usize>>, Vec<(usize, f32)>)>{ //FxHashMap<usize, (usize, u32)> {
 
     // feature file
     let writer = File::create(outfile)?;
@@ -376,7 +383,7 @@ fn peak_intervals(
                     // changes: add in weight_value 
                     
                     let mut peak_weight = 1.0; // Default weight 
-                    // Update peak weight if weigh_column is specified
+                    //Update peak weight if weigh_column is specified
                     if let Some(column_number) = weight {
                         if fields.len() > column_number{
                             match fields[column_number].parse() { //change column number here 
@@ -407,7 +414,8 @@ fn peak_intervals(
                             });
 
                             intervals.push(Interval {start, stop: end, val: total_peaks});
-                            ind_peak.push((*group_index, peak_weight)); 
+                            //ind_peak.insert(index, (*group_index, peak_weight));
+                            ind_peak.push((*group_index, peak_weight)); // check what is keeping track of index 
                                 
                     } else { 
                             error!("Line {}: Group Column not found", index +1 );
@@ -415,6 +423,7 @@ fn peak_intervals(
                     }else {
                         intervals.push(Interval { start, stop: end, val: total_peaks});
                         ind_peak.push((index-skipped_lines, peak_weight));
+                        // ind_peak.insert(index, (index - skipped_lines, peak_weight));
                         writeln!(writer, "{}-{}-{}", chromosome, start, end)?;
                     }
                     total_peaks += 1; // corresponds to if fields.len() >= 3 {
